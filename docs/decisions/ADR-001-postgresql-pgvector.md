@@ -72,4 +72,5 @@ Structured filters are pushed into SQL when safe and beneficial.
 
 - PostgreSQL Full Text Search and the pgvector extension are named in
   `docs/MASTER_PLAN.md`. No external benchmark or version has been verified
-  for this ADR. Versions are pinned in Milestone 1.
+  for this ADR. Milestone 1 pinned PostgreSQL 16 with pgvector 0.8.6
+  (`pgvector/pgvector:0.8.6-pg16`, verified running locally).

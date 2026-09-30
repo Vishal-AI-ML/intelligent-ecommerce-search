@@ -28,7 +28,7 @@ htmlcov/
 *.log
 data/raw/*
 data/processed/*
-models/
+/models/
 
 # Keep directory placeholders if added intentionally
 !.gitkeep

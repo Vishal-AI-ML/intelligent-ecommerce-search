@@ -41,9 +41,9 @@ catalog, and documented there.
   weights and caches. These are not source code and are git-ignored.
 - `src/models/` (if it exists) is for source code, such as Pydantic or
   SQLAlchemy model classes. It is source code and must be tracked.
-- The current `.gitignore` entry is `models/`, which is unanchored and would
-  also match `src/models/` at any depth. **Open Milestone 1 task:** change it
-  to `/models/`. `.gitignore` is not modified in Milestone 0.
+- The former `.gitignore` entry `models/` was unanchored and would also match
+  `src/models/` at any depth. **Done in Milestone 1:** it is now `/models/`.
+  (The source package is `src/ecommerce_search/models/` if it is ever created.)
 
 ## Selection criteria (Milestone 4)
 
@@ -72,8 +72,6 @@ catalog, and documented there.
 
 - Model download and local compute are needed. Model weights live under
   root-level `/models/` and are git-ignored.
-- Until the `.gitignore` fix is made, the unanchored `models/` pattern
-  could hide `src/models/` source files from Git.
 - A Milestone 4 model choice made before Milestone 9 rests on provisional
   evaluation and may need revisiting.
 
