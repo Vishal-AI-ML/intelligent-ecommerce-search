@@ -1,0 +1,272 @@
+# Architecture
+
+- Status: Milestone 0 design (nothing below is implemented yet)
+- Date: 2026-09-30
+- Related: `docs/spec.md`, `docs/data-quality.md`, `docs/decisions/`
+
+## 1. Principles
+
+1. Deterministic extraction before inference.
+2. Bounded, typed decisions instead of unrestricted generation.
+3. Confidence gating instead of blind automation.
+4. Human-reviewed labels instead of generated ground truth.
+5. Measured improvement instead of assumed performance.
+6. Simple architecture instead of unnecessary infrastructure. PostgreSQL is
+   the single datastore for catalog, lexical search and vectors (ADR-001).
+7. The core must work with no remote model. Remote providers are optional
+   add-ons behind typed interfaces (ADR-003, ADR-005).
+
+## 2. Component overview
+
+```text
+                    +-------------------------------+
+  Buyer query  ---> |  FastAPI (GET/POST /search)   |
+                    +---------------+---------------+
+                                    |
+                    +---------------v---------------+
+                    |  Query understanding          |
+                    |  - deterministic parser       |
+                    |  - DecisionProvider (ADR-003) |
+                    |  - confidence gate            |
+                    +---------------+---------------+
+                                    |
+             +----------------------+----------------------+
+             |                                             |
+  +----------v-----------+                     +-----------v----------+
+  | Lexical retrieval    |                     | Dense retrieval      |
+  | PostgreSQL FTS       |                     | local embeddings +   |
+  |                      |                     | pgvector (ADR-004)   |
+  +----------+-----------+                     +-----------+----------+
+             |                                             |
+             +----------------------+----------------------+
+                                    |
+                    +---------------v---------------+
+                    | Safe structured filters       |
+                    | RRF fusion (ADR-002)          |
+                    | Optional cross-encoder rerank |
+                    +---------------+---------------+
+                                    |
+                           ranked products
+                            + telemetry
+```
+
+Shared components: taxonomy, attribute schema, brand dictionary,
+normalization rules, Hinglish phrase dictionary, provider interfaces,
+confidence policies and evaluation infrastructure.
+
+## 3. Buyer search pipeline
+
+```text
+Query
+ -> deterministic parser
+ -> optional Jev bounded decisions
+ -> confidence gate
+ -> lexical + dense retrieval
+ -> safe structured filters
+ -> Reciprocal Rank Fusion
+ -> optional cross-encoder reranker
+ -> ranked products + telemetry
+```
+
+Notes:
+
+- The diagram shows the logical order. Safe filters may be pushed into the
+  lexical and dense SQL queries when that is safe and beneficial. The physical
+  placement is decided and measured in Milestone 7.
+- Hard-filter rule (`docs/spec.md` §7): explicit constraints parsed
+  deterministically with high reliability may become hard filters. A
+  model-derived decision may become a hard filter only after a confidence
+  threshold is justified from human-reviewed data in Milestone 12. Before
+  that, model-derived decisions may influence ranking or retrieval routing but
+  not hard filtering.
+- Initial candidate sizes (configurable): `lexical_k=50`, `dense_k=50`,
+  `candidate_k=50`. Rerank the top 20 and return 10. `rrf_k` is configurable
+  and has no initial value. Milestone 5 records a provisional value in
+  configuration, marked provisional (ADR-002).
+- Each result keeps its lexical rank, dense rank (either may be absent), fused
+  score and, when reranking runs, reranker score.
+
+### 3.1 Search versions
+
+| Version | Pipeline | Milestone |
+|---|---|---|
+| V0 | Lexical (PostgreSQL FTS) | 3 |
+| V1 | Lexical + dense + RRF | 5 |
+| V2 | V1 + structured filtering | 7 |
+| V3 | V2 + reranking | 8 |
+| V4 | V3 + confidence-gated Jev decisions | 12 |
+
+The search version is configurable and reported in every search response, so
+versions can be compared on the same catalog and Golden Dataset.
+
+Evaluation order: Milestones 3 to 8 use provisional, non-authoritative smoke
+queries. Human-reviewed labels arrive in Milestone 9, and Milestone 10 re-runs
+V0 through V3 on the human-reviewed Golden Dataset. V4 is evaluated in
+Milestone 12 and is enabled by default only if that evaluation shows a
+measured benefit and acceptable safety, latency and cost. Provisional tuning
+and authoritative evaluation are always reported separately
+(`docs/spec.md` §9.1).
+
+## 4. Seller listing pipeline (Level 2)
+
+```text
+Raw listing
+ -> deterministic normalization
+ -> attribute candidates
+ -> optional Jev bounded decisions
+ -> confidence/risk gate
+ -> auto_accept | accept_with_warning | manual_review
+ -> normalized catalog record
+```
+
+- Raw input is stored unchanged before any processing.
+- Uncertain model names are never rewritten automatically.
+- No automatic path produces a rejection. Rejection happens only through human
+  review.
+
+## 5. Data model
+
+The concrete schema is implemented in Milestone 2. This section fixes the
+design constraints, not the DDL.
+
+### 5.1 Product (normalized catalog record)
+
+- Core columns: `product_id`, `seller_id`, `title`, `description`,
+  `category`, `subcategory`, `brand`, `price`, `currency`, `rating`,
+  `review_count`, `availability`, `source_type`, `created_at`, `updated_at`.
+- Frequently filtered attributes get proper typed columns (at minimum those
+  used by V2 filters: `ram_gb`, `storage_gb`, `storage_type`, plus core
+  `category`, `brand`, `price`).
+- Other category attributes (`processor`, `gpu`, `screen_size_inches`,
+  `operating_system`, `weight_kg`, `camera`, `battery_mah`, `size`, `color`,
+  `material`, `gender`, `wireless`, `anc`, `battery_life_hours`,
+  `connectivity`) are typed columns or validated JSONB, decided in
+  Milestone 2 by filtering needs.
+- Attributes that do not apply to a category stay null.
+- `storage_type` taxonomy is an open question: NVMe is an interface/protocol
+  and NVMe products are normally SSDs. Milestone 6 or 7 decides whether
+  `storage_type` is SSD/HDD with a separate interface field, or NVMe is an SSD
+  subtype. An explicit `ssd` query must not exclude NVMe SSDs
+  (`docs/spec.md` §14, item 9).
+- Provenance: `source_type`, plus the dataset reference and a synthetic flag
+  (see `docs/data-quality.md`).
+
+### 5.2 Search representations
+
+- Lexical: an FTS `tsvector` generated from approved text fields, with an
+  appropriate index (Milestone 3).
+- Dense: a pgvector column plus embedding metadata: model name, revision,
+  dimensions, normalization, catalog version and generation timestamp
+  (ADR-004).
+- Embedding and search text never contains evaluation labels.
+
+### 5.3 Separation of raw, normalized, inferred and human values
+
+**Provisional:** the mutability column is a proposed design. It is finalized
+in Milestone 2 (catalog schema) and Milestone 13 (listing normalization).
+
+| Layer | Content | Mutability (provisional) |
+|---|---|---|
+| Raw | Seller input exactly as received | Immutable |
+| Normalized | Deterministic normalization output, linked to raw | Regenerated when rules change (versioned) |
+| Inferred | Model decisions with provider, model version, confidence, timestamp | Append-only |
+| Risk signals | Triage signals with criteria version | Append-only |
+| Human outcomes | Reviewer decisions and labels with reviewer and timestamp | Append-only. Authoritative |
+
+### 5.4 Query understanding
+
+`QueryUnderstanding` holds typed optional fields: `raw_query`, `category`,
+`brand`, `ram_gb`, `storage_gb`, `storage_type`, `min_price`, `max_price`,
+`semantic_intent`, `retrieval_strategy`, `attributes`. Unset means unknown.
+Unknown is never turned into a guessed value.
+
+### 5.5 Evaluation and experiment records
+
+Stored under `evals/` (created in a later milestone), separate from application
+code: golden queries, human labels, decision labels, experiment records and
+generated reports. The fields each experiment record carries are listed in
+`docs/spec.md` §9.
+
+## 6. Decision layer
+
+- `DecisionProvider` interface (ADR-003), conceptually
+  `understand(query, deterministic_result) -> DecisionResult`.
+- Implementations: `DeterministicDecisionProvider` (default, local),
+  `JevDecisionProvider` (optional, Milestone 11, ADR-005), and an optional
+  `LLMDecisionProvider` used only as an experimental comparison.
+- `DecisionResult` is validated with Pydantic. Each decision is one of a fixed
+  set of bounded decision types with a closed label set, a raw provider
+  probability and a gate confidence.
+- Raw provider probability is provider output. Gate confidence is the value
+  the confidence policy consumes. They are separate fields and are logged
+  separately. Jev's raw probability must not become gate confidence until its
+  meaning and calibration are verified in Milestone 12 (ADR-003, ADR-005).
+- The confidence gate sits outside providers. Providers propose and the gate
+  decides. Gate thresholds are configuration, experimental until
+  human-reviewed data exists.
+- Milestone 11 implements the optional Jev provider, Milestone 12 evaluates
+  it, and it is enabled in the default/V4 configuration only if Milestone 12
+  shows a measured benefit and acceptable safety, latency and cost.
+- Failure handling: timeout, transport error, schema-invalid output,
+  out-of-set label or disabled provider all lead to the deterministic result,
+  and the fallback reason is recorded.
+
+## 7. Configuration and secrets
+
+- Typed configuration via Pydantic settings from environment variables
+  (Milestone 1).
+- Configurable values include: search version; candidate sizes
+  (`lexical_k`, `dense_k`, `candidate_k`, `rrf_k`, rerank depth, result count);
+  embedding model and revision; reranker model and on/off; decision provider
+  enablement, endpoint, model, timeout, retries and thresholds.
+- Credentials only in environment variables. `.env` is git-ignored and only
+  `.env.example` may be committed. Secrets are never logged.
+
+## 8. Telemetry
+
+- Stage timings: `query_understanding_ms`, `jev_decision_ms`, `lexical_ms`,
+  `vector_ms`, `filtering_ms`, `rrf_ms`, `reranking_ms`, `serialization_ms`,
+  `total_ms`. Aggregated as P50, P95 and P99.
+- Response metadata: search version, provider, reranker state, latency,
+  result count, applied safe filters.
+- Provider telemetry: provider, pinned model version, latency, raw provider
+  probabilities and gate-confidence values (separate fields), fallback reason
+  and returned cost where available.
+- Full observability (request IDs, structured logs, aggregate metrics) is
+  Milestone 17.
+
+## 9. API surface
+
+| Endpoint | Milestone |
+|---|---|
+| `GET /health` | 1 |
+| `GET /search?q=...`, `POST /search` | 3 onward |
+| `POST /listings/analyze`, `POST /listings/normalize` | 13–14 (provisional) |
+| `GET /reviews/pending`, `POST /reviews/{review_id}/decision` | Listing milestones (provisional) |
+
+The listing endpoint milestone mapping is provisional. The master plan does
+not assign endpoints to milestones, and the mapping is confirmed when
+Milestones 13 to 15 are planned.
+
+## 10. Repository layout
+
+Directories are created only when their milestone begins. The intended layout
+is in `docs/MASTER_PLAN.md` §17. Milestone 0 adds only `docs/*.md` and
+`docs/decisions/`.
+
+## 11. Deployment
+
+- Local development: Docker Compose with PostgreSQL + pgvector (Milestone 1).
+- AWS (ECR, ECS/Fargate, PostgreSQL with pgvector, Secrets Manager,
+  CloudWatch, Terraform) only in Milestone 19, after local stability and with
+  approval before chargeable actions. No EKS.
+
+## 12. Architecture decision records
+
+| ADR | Decision |
+|---|---|
+| [ADR-001](decisions/ADR-001-postgresql-pgvector.md) | PostgreSQL + pgvector as the single search datastore |
+| [ADR-002](decisions/ADR-002-hybrid-retrieval-rrf.md) | Hybrid lexical + dense retrieval fused with RRF |
+| [ADR-003](decisions/ADR-003-decision-provider.md) | `DecisionProvider` abstraction with a deterministic default |
+| [ADR-004](decisions/ADR-004-local-embedding-strategy.md) | Configurable local embedding models |
+| [ADR-005](decisions/ADR-005-jev-bounded-decision-provider.md) | Jev as an optional bounded-decision provider |
