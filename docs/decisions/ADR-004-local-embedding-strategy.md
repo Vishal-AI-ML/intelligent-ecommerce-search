@@ -2,7 +2,8 @@
 
 ## Status
 
-Accepted (strategy). Model selection deferred to Milestone 4.
+Accepted (strategy). Model selection deferred to Milestone 4. **Milestone 4:** model selected in
+[ADR-006](ADR-006-embedding-model-selection.md) (provisional until Golden Dataset evaluation).
 
 ## Date
 
