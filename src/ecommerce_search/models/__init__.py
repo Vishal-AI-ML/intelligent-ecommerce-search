@@ -10,6 +10,7 @@ from ecommerce_search.models.catalog import (
     RawCatalogRecord,
     ShoeSpec,
 )
+from ecommerce_search.models.search import ProductSearchDocument
 
 __all__ = [
     "CatalogDataset",
@@ -18,6 +19,7 @@ __all__ = [
     "LaptopSpec",
     "PhoneSpec",
     "Product",
+    "ProductSearchDocument",
     "RawCatalogRecord",
     "ShoeSpec",
 ]

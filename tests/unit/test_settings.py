@@ -14,6 +14,9 @@ ENV_KEYS = [
     "DB_CONNECT_TIMEOUT_SECONDS",
     "DB_POOL_TIMEOUT_SECONDS",
     "DB_STATEMENT_TIMEOUT_MS",
+    "SEARCH_LEXICAL_K",
+    "SEARCH_DEFAULT_TOP_K",
+    "SEARCH_MAX_QUERY_LENGTH",
 ]
 
 
@@ -60,6 +63,10 @@ def test_password_is_required():
         {"db_statement_timeout_ms": 0},
         {"db_statement_timeout_ms": -5},
         {"db_statement_timeout_ms": 2_147_483_648},
+        {"search_lexical_k": 0},
+        {"search_default_top_k": 0},
+        {"search_max_query_length": 0},
+        {"search_lexical_k": 5, "search_default_top_k": 6},
     ],
 )
 def test_invalid_values_rejected(make_settings, overrides):
@@ -102,3 +109,17 @@ def test_timeouts_read_from_environment(monkeypatch):
 def test_statement_timeout_must_be_an_integer(make_settings):
     with pytest.raises(ValidationError):
         make_settings(db_statement_timeout_ms="1; DROP TABLE x")
+
+
+def test_search_defaults(make_settings):
+    s = make_settings()
+    assert (s.search_lexical_k, s.search_default_top_k, s.search_max_query_length) == (50, 10, 200)
+
+
+def test_search_settings_read_from_environment(monkeypatch):
+    monkeypatch.setenv("POSTGRES_PASSWORD", "pw")
+    monkeypatch.setenv("SEARCH_LEXICAL_K", "20")
+    monkeypatch.setenv("SEARCH_DEFAULT_TOP_K", "5")
+    monkeypatch.setenv("SEARCH_MAX_QUERY_LENGTH", "80")
+    s = Settings(_env_file=None)
+    assert (s.search_lexical_k, s.search_default_top_k, s.search_max_query_length) == (20, 5, 80)

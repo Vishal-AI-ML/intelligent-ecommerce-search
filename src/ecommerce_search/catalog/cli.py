@@ -442,7 +442,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     except (SQLAlchemyError, psycopg.Error) as exc:
         return _fail(
             f"database error ({type(exc).__name__}); check that the database exists, is reachable "
-            "and has been migrated to head. Details are intentionally not shown"
+            "and has been migrated to head (`uv run alembic upgrade head`). Details are "
+            "intentionally not shown"
         )
 
 

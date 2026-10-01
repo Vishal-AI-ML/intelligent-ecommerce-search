@@ -15,7 +15,13 @@ Milestone 2 (Product catalog): **complete.** A product schema (migration `0002`)
 deterministic **synthetic** seed catalog of 240 products (80 laptops, 60 phones, 50 shoes,
 50 headphones; not real marketplace data), atomic idempotent ingestion, automated quality
 checks and reports, and a recorded human review of a 36-product sample (see "Product catalog"
-below). There is no search, embedding or model code yet.
+below).
+
+Milestone 3 (PostgreSQL lexical baseline, **V0**): **implemented.** A derived
+`product_search_documents` table (migration `0003`, weighted `tsvector` + GIN index), document
+building inside ingestion, an explicit `search reindex` backfill command, a lexical retrieval
+service and `GET`/`POST /search` (see "Lexical search (Milestone 3)" below and
+`docs/search-v0-baseline.md`). There is no embedding, vector or model code yet.
 
 ## Prerequisites
 
@@ -34,6 +40,10 @@ cp .env.example .env        # PowerShell: Copy-Item .env.example .env
 non-empty, local-only password of your choosing.** `.env.example` deliberately leaves it
 empty; Compose and the application both refuse to start with a missing or empty password.
 Do not reuse a real password. `.env` is git-ignored and must never be committed.
+
+Lexical-search limits are typed settings too: `SEARCH_LEXICAL_K=50` (maximum `top_k`),
+`SEARCH_DEFAULT_TOP_K=10` and `SEARCH_MAX_QUERY_LENGTH=200`. They are forwarded by Compose to the
+`api` service only (not to `db` or `migrate`), with these same defaults.
 
 Database waits are bounded by settings in `.env.example` (`DB_CONNECT_TIMEOUT_SECONDS`,
 `DB_POOL_TIMEOUT_SECONDS`, `DB_STATEMENT_TIMEOUT_MS`). The defaults are conservative
@@ -56,6 +66,14 @@ curl http://127.0.0.1:8000/health
 Startup order: `db` becomes healthy, the one-shot `migrate` service runs
 `alembic upgrade head` and exits 0, then `api` starts. The API never runs
 migrations itself.
+
+**Compose, migration and a running API do not by themselves give you a populated search
+index.** `migrate` creates the empty `product_search_documents` table (revision `0003`) and
+nothing else. `GET /search` then returns no results until the catalog is ingested and the
+documents exist: run `catalog ingest --database <db>` (which builds the documents) and/or
+`search reindex --database <db>`, then check `search status --database <db>` (see "Lexical search
+(Milestone 3)" below). The seed file is not part of the container image, so run these from the
+host against the published database port.
 
 Database only, with the API/tests on the host:
 
@@ -150,6 +168,64 @@ uv run python -m ecommerce_search.catalog review-verify                  # offli
 
 **Warning: downgrading revision `0002` drops all catalog tables and their data.**
 
+## Lexical search (Milestone 3)
+
+V0 is PostgreSQL full-text search over a **derived** index. Nothing about it is tuned or
+measured against relevance labels: there is no Golden Dataset yet, so no quality metric is
+claimed. Details, tokenization observations and measured latency are in
+`docs/search-v0-baseline.md`.
+
+Required sequence for a usable index (each step is explicit; none runs automatically):
+
+```bash
+uv run alembic upgrade head                                      # 1. revision 0003 creates the (empty) table
+uv run python -m ecommerce_search.catalog ingest --database <db>  # 2. ingest; also builds the documents
+uv run python -m ecommerce_search.search reindex --database <db>  #    (or) heal missing/stale documents
+uv run python -m ecommerce_search.search status  --database <db>  # 3. verify: expect state=CURRENT
+uv run python scripts/benchmark_lexical.py                        # benchmark (scratch databases only)
+```
+
+Run `search status` (or `catalog check --database <db>`, check 10 and its `search_index`
+section) **before relying on result completeness**. Running the application or the commands
+against a database that is not at revision `0003` fails with a sanitized message telling you to
+run `uv run alembic upgrade head`; nothing is written. The API itself returns the fixed
+`503 {"detail": "search unavailable"}` and logs the same hint (never SQL or credentials).
+
+* **Documents.** One row per product (`product_id`, `document_version`,
+  `source_content_sha256`, weighted `search_vector`, `built_at`), built from validated catalog
+  fields only: weight A title and brand, B explicit category/subcategory singular and plural
+  forms plus model-identifier variants, C canonical technical attributes (`8gb ram`, `256gb`,
+  `ssd`, `nvme`, `anc`, ...), D description. Raw seller lines, dataset/provenance data, review
+  outcomes, seller ids, prices, availability and ratings are never indexed.
+* **Synchronization.** Ingestion writes documents in the same transaction as the catalog rows
+  (a failure rolls back both) and leaves current documents, and their `built_at`, untouched.
+  `reindex` builds missing and stale documents in one transaction and requires an explicit
+  `--database`; it prints only the database name. **A missing or stale index may produce
+  incomplete results until `reindex` succeeds.** Search itself never claims completeness; check
+  with `search status` or `catalog check --database <db>` (check 10).
+* **Search.** `plainto_tsquery('simple', q)`: every term must match (strict AND), no stemming,
+  no stopwords, no synonyms. `ts_rank` with initial, untuned weights D=0.1, C=0.2, B=0.4, A=1.0,
+  ordered by score then `product_id`. The score is query-relative and not a probability.
+  Queries are not interpreted: `8gb`, `hp` and `40k` are plain words. Filler and Hinglish words
+  (`ke liye`, `sasta`) are ordinary required terms, so they can empty the result (a V0
+  limitation for the query-understanding milestone).
+
+```bash
+curl "http://127.0.0.1:8000/search?q=hp+laptop&top_k=5"
+curl -X POST http://127.0.0.1:8000/search -H "Content-Type: application/json"      -d '{"query": "wireless headphones", "top_k": 5}'
+```
+
+`top_k` defaults to 10 and must be between 1 and `SEARCH_LEXICAL_K`; blank, over-long or unsafe
+queries are `422`. Unsafe means surrogate code points, control characters (NUL included) and
+invisible format characters such as zero-width space, bidirectional overrides or a byte-order
+mark; ordinary whitespace is collapsed, and letters of every script (including ZWNJ/ZWJ
+joiners used in Persian and Indic text) are accepted. Error text never repeats the input; punctuation-only and unknown queries are `200` with no results;
+a database failure is a fixed `503 {"detail": "search unavailable"}`. `result_count` is the number
+of results in the response, not the number of database matches. `/health` is unchanged.
+
+**Warning: downgrading revision `0003` drops the derived search table** (rebuild it with
+`reindex`); downgrading `0002` still drops all catalog data.
+
 ## `GET /health`
 
 Readiness-oriented. Returns `200` with `status: "ok"` when PostgreSQL is
@@ -167,7 +243,7 @@ uv run ruff format --check .
 uv run pytest -m "not integration"     # unit + API tests, no Docker, no .env, no password
 docker compose up -d db
 uv run alembic upgrade head
-uv run pytest -m integration           # needs the compose database running
+uv run pytest -m integration           # needs the compose database running (scratch DBs only)
 docker compose config -q
 ```
 

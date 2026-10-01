@@ -18,7 +18,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from sqlalchemy import Engine, func, select
-from sqlalchemy.exc import IntegrityError
+from sqlalchemy.exc import IntegrityError, ProgrammingError
 from sqlalchemy.orm import Session
 
 from ecommerce_search.catalog.mapping import core_values, spec_values
@@ -38,6 +38,9 @@ from ecommerce_search.models.catalog import (
     Product,
     RawCatalogRecord,
 )
+from ecommerce_search.search.indexing import sync_documents
+
+UNDEFINED_TABLE = "42P01"  # PostgreSQL SQLSTATE: undefined_table
 
 
 class IngestRefused(Exception):
@@ -50,6 +53,7 @@ class IngestResult:
     updated: int = 0
     unchanged: int = 0
     raw_records_inserted: int = 0
+    search_documents_written: int = 0  # created or rebuilt in the same transaction
     dataset_created: bool = False
     absent_product_ids: list[str] = field(default_factory=list)
 
@@ -58,7 +62,8 @@ class IngestResult:
             f"inserted={self.inserted} updated={self.updated} unchanged={self.unchanged} "
             f"raw_records_inserted={self.raw_records_inserted} "
             f"dataset_created={self.dataset_created} "
-            f"absent_from_file={len(self.absent_product_ids)}"
+            f"absent_from_file={len(self.absent_product_ids)} "
+            f"search_documents_written={self.search_documents_written}"
         )
 
 
@@ -288,11 +293,26 @@ def persist(engine: Engine, catalog: LoadedCatalog, provenance: Provenance) -> I
                     result.updated += 1
                 session.flush()
 
+            # Search documents change in the same transaction as the catalog rows: a failure
+            # anywhere rolls both back. Current documents are left untouched (built_at kept).
+            synced = sync_documents(
+                session, [(line.record, line.content_sha256) for line in catalog.lines]
+            )
+            result.search_documents_written = synced.inserted + synced.updated
+
             in_file = {line.record.product_id for line in catalog.lines}
             known = session.scalars(
                 select(Product.product_id).where(Product.dataset_pk.in_([d.id for d in family]))
             )
             result.absent_product_ids = sorted(set(known) - in_file)
+    except ProgrammingError as exc:
+        if getattr(exc.orig, "sqlstate", None) == UNDEFINED_TABLE:
+            # The transaction was rolled back: no dataset, product, raw or document row exists.
+            raise IngestRefused(
+                "the database is not migrated to the current revision (a search table is "
+                "missing); run `uv run alembic upgrade head` and retry. Nothing was written"
+            ) from None
+        raise
     except IntegrityError as exc:
         # Expected only if something bypassed the advisory lock; never echo SQL or parameters.
         name = getattr(getattr(exc.orig, "diag", None), "constraint_name", None)

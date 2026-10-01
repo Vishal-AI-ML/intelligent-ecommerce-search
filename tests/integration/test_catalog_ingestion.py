@@ -486,14 +486,23 @@ def flawed_lines(raw_record):
     ]
 
 
+# Database-audit-only checks: the file side cannot evaluate them. M3 adds the search-index check
+# (check 10) to this group; it is covered by tests/integration/test_search_indexing.py.
+DATABASE_ONLY_CHECKS = (
+    "spec_linkage",
+    "raw_normalized_consistency",
+    "embedding_search_text_leakage",
+)
+
+
 def comparable(report):
     return (
+        [c for c in report.checks if c["name"] not in DATABASE_ONLY_CHECKS],
         [
-            c
-            for c in report.checks
-            if c["name"] not in ("spec_linkage", "raw_normalized_consistency")
+            f.to_dict() | {"line": None}
+            for f in report.findings
+            if f.check not in DATABASE_ONLY_CHECKS
         ],
-        [f.to_dict() | {"line": None} for f in report.findings],
         report.statistics,
         report.total_records,
     )

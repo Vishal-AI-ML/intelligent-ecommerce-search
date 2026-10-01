@@ -1,6 +1,6 @@
 # Data Quality and Dataset Strategy
 
-- Status: Milestone 0 design; Milestone 2 decisions recorded in §2.5, §3.1 and §5.1
+- Status: Milestone 0 design; Milestone 2 decisions recorded in §2.5, §3.1 and §5.1; Milestone 3 activated check 10 for database audits (§3.1)
 - Date: 2026-09-30
 - Related: `docs/spec.md`, `docs/architecture.md`
 
@@ -175,12 +175,28 @@ records) and to a database audit with zero products.
 patterns and the words wireless/wired/noise cancel and men/women/unisex/kids are compared;
 nothing is inferred. The brand must appear in the title.
 
-**Check 10 (embedding/search text contains no evaluation labels): not applicable in
-Milestone 2**, because no embedding text, tsvector/search text or evaluation labels exist. It
-is reported as `not_applicable` and deferred to the milestone that creates them. Instead,
-Milestone 2 verifies structurally that catalog tables/models and seed records contain no
-relevance-label or review-outcome fields, and that review outcomes live only in
-`catalog_reviews` and are never written into product text.
+**Check 10 (embedding/search text contains no evaluation labels).** Not applicable in
+Milestone 2 (no search text existed). **Milestone 3 activates it for database audits only**
+(`catalog check --database NAME`, check name `embedding_search_text_leakage`). File-side
+reports keep it `not_applicable` (search documents are derived rows that exist only in a
+database). A database audit rebuilds every product's search vector from the stored catalog rows
+with the same builder used by ingestion and compares it with the stored vector, and reports an
+error for: a **missing** document, a **stale** `document_version`, a **source content hash**
+that differs from `products.content_sha256`, a **tampered or unexpected** vector (any difference
+from the rebuilt one), and unexpected lexemes that match review, evaluation or provenance text
+(`catalog_reviews` verdicts/issue fields/notes, dataset ids, source-type markers). A database not
+migrated to `0003` reports the check as `not_applicable` with that reason. The audit does not
+decide whether text is a "label" by word: the bare word "synthetic" is legitimate catalog text
+(a shoe material in the seed), so the guarantee is structural (the builder reads a closed
+whitelist of fields; a unit test enforces it) plus rebuilt-vector equality. Database quality reports also carry a clearly separate `search_index` section (not the M2
+`versions` block): `document_version`, `fts_config`, `search_version`, the number of products and
+search documents, and the counts of missing documents, stale document versions, source-hash
+mismatches and tampered or unexpected vectors. File reports state in the same section that the
+audit is not applicable because no stored search index exists. **`RULES_VERSION`
+stays `"1"`:** the search index has its own versioning (`DOCUMENT_VERSION`), and bumping the rule
+set would make ingestion refuse to re-ingest existing dataset versions (an M2-tested guard).
+Structural separation is also covered by `schema_no_label_fields` and
+`evaluation_label_fields`.
 
 ## 4. Raw data preservation
 
@@ -308,9 +324,9 @@ evaluation.
 - [ ] Dataset selected with a complete provenance record and confirmed license.
   (Milestone 2: provenance record complete; there is no formal licence identifier. Rights are
   explained in `rights_note`. Left unchecked because no licence exists to confirm.)
-- [ ] All ten automated checks implemented and tested.
-  (Milestone 2: nine are implemented and tested; check 10 is `not_applicable` until
-  retrieval text exists, see §3.1.)
+- [x] All ten automated checks implemented and tested.
+  (Milestone 2: nine implemented; Milestone 3 implemented check 10 for database audits, see §3.1.
+  Left as `not_applicable` on file reports by design.)
 - [x] Quality report generated from the actual ingested data. (Milestone 2: database audit of a
   scratch database; reports are generated, git-ignored and not committed as snapshots.)
 - [x] Synthetic records flagged. No synthetic data described as real.

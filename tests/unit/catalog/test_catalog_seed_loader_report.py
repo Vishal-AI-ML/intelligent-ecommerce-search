@@ -105,7 +105,9 @@ def test_seed_passes_error_level_checks_with_real_evaluation(seed_catalog):
     assert report.error_count == 0
     by_name = {c["name"]: c for c in report.checks}
     assert by_name["unique_product_id"]["evaluated"] == 240
+    # M3: check 10 is evaluated by database audits only; file reports stay not_applicable.
     assert by_name["embedding_search_text_leakage"]["status"] == "not_applicable"
+    assert "file reports" in by_name["embedding_search_text_leakage"]["note"]
     assert by_name["spec_linkage"]["status"] == "not_applicable"  # database-only check
 
 
@@ -114,7 +116,7 @@ def test_no_network_libraries_are_imported_by_catalog_code():
         r"^\s*(import|from)\s+(requests|urllib|httpx|socket|http\.client|aiohttp)\b", re.M
     )
     files = [ROOT / "scripts" / "generate_seed_catalog.py"]
-    for package in ("catalog", "ingestion", "models"):
+    for package in ("catalog", "ingestion", "models", "search"):  # M3: search needs no network
         files += list((ROOT / "src" / "ecommerce_search" / package).rglob("*.py"))
     assert files
     assert [str(f) for f in files if forbidden.search(f.read_text(encoding="utf-8"))] == []

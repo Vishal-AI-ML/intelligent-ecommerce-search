@@ -1,7 +1,7 @@
 from functools import lru_cache
 from typing import Literal
 
-from pydantic import Field, SecretStr
+from pydantic import Field, SecretStr, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from sqlalchemy.engine import URL
 
@@ -30,6 +30,17 @@ class Settings(BaseSettings):
     db_pool_timeout_seconds: int = Field(default=10, ge=1)
     # PostgreSQL accepts statement_timeout as int32 milliseconds; 0 (disabled) is not allowed.
     db_statement_timeout_ms: int = Field(default=30_000, ge=1, le=2_147_483_647)
+
+    # Lexical search (Milestone 3). `search_lexical_k` is the maximum accepted `top_k`.
+    search_lexical_k: int = Field(default=50, ge=1, le=1000)
+    search_default_top_k: int = Field(default=10, ge=1, le=1000)
+    search_max_query_length: int = Field(default=200, ge=1, le=1000)
+
+    @model_validator(mode="after")
+    def _default_top_k_within_limit(self) -> "Settings":
+        if self.search_default_top_k > self.search_lexical_k:
+            raise ValueError("search_default_top_k must not exceed search_lexical_k")
+        return self
 
     def database_url(self, database: str | None = None) -> URL:
         """SQLAlchemy URL for the configured server (optionally another database)."""

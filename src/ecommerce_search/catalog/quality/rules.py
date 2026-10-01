@@ -515,9 +515,10 @@ def duplicate_share(ctx: Context) -> CheckOutcome:
 
 
 NOT_APPLICABLE_LEAKAGE_NOTE = (
-    "Not applicable in Milestone 2: no embedding text, tsvector/search text or evaluation labels "
-    "exist yet. The full check is deferred to the milestone that creates them. Structural "
-    "separation is covered by schema_no_label_fields and evaluation_label_fields."
+    "Not applicable for file reports: search documents are derived rows that exist only in a "
+    "database. Database audits evaluate them (missing, stale, source-hash mismatch, rebuilt-vector "
+    "equality and forbidden review/provenance text). Structural separation is also covered by "
+    "schema_no_label_fields and evaluation_label_fields."
 )
 
 # Order is the report order. "external" checks are computed by the file/database loaders.
@@ -670,7 +671,10 @@ def run_checks(
         if spec.kind == "record" and spec.fn is not None:
             outcomes[spec.name] = spec.fn(ctx)
         elif spec.kind == "static":
-            outcomes[spec.name] = CheckOutcome(0, (), NOT_APPLICABLE_LEAKAGE_NOTE)
+            # Not applicable unless a database audit supplies a real outcome.
+            outcomes[spec.name] = external.get(
+                spec.name, CheckOutcome(0, (), NOT_APPLICABLE_LEAKAGE_NOTE)
+            )
         else:
             outcomes[spec.name] = external.get(
                 spec.name, CheckOutcome(0, (), "not computed for this source")

@@ -20,14 +20,22 @@ EXPECTED_TABLES = {
     "shoe_specs",
     "headphone_specs",
     "catalog_reviews",
+    # Milestone 3 adds exactly one derived table: the lexical search index.
+    "product_search_documents",
 }
+SEARCH_TABLE = "product_search_documents"
 
 
-def test_metadata_has_exactly_the_m2_tables_and_no_search_columns():
+def test_metadata_has_exactly_the_m2_and_m3_tables_and_search_columns_only_in_the_index_table():
+    # M3 intentionally supersedes the M2 "no search columns" rule: the single allowed place for a
+    # tsvector is product_search_documents.search_vector. No vector/JSON column exists anywhere.
     assert set(Base.metadata.tables) == EXPECTED_TABLES
     for table in Base.metadata.tables.values():
         for column in table.columns:
-            assert type(column.type).__name__ not in {"TSVECTOR", "Vector", "JSONB", "JSON"}, column
+            kind = type(column.type).__name__
+            assert kind not in {"Vector", "JSONB", "JSON"}, column
+            if kind == "TSVECTOR":
+                assert (table.name, column.name) == (SEARCH_TABLE, "search_vector")
 
 
 def test_constraint_names_follow_convention_and_fit_postgres_limit():
@@ -40,9 +48,15 @@ def test_constraint_names_follow_convention_and_fit_postgres_limit():
     assert len(names) == len(set(names))
 
 
-def test_no_indexes_beyond_constraint_backing_ones():
+def test_no_indexes_beyond_constraint_backing_ones_except_the_m3_gin_index():
+    # M3 intentionally adds one search index; every other table still has none.
     for table in Base.metadata.tables.values():
-        assert not table.indexes, f"{table.name} defines a non-constraint index"
+        if table.name != SEARCH_TABLE:
+            assert not table.indexes, f"{table.name} defines a non-constraint index"
+    (index,) = Base.metadata.tables[SEARCH_TABLE].indexes
+    assert index.name == "ix_product_search_documents_search_vector"
+    assert index.dialect_options["postgresql"]["using"] == "gin"
+    assert [c.name for c in index.columns] == ["search_vector"]
 
 
 def test_catalog_tables_carry_no_label_or_review_fields():

@@ -1,6 +1,6 @@
 # Architecture
 
-- Status: Milestone 0 design (nothing below is implemented yet)
+- Status: Milestone 0 design; implemented parts are marked per section (M1 foundation, M2 catalog, M3 lexical V0)
 - Date: 2026-09-30
 - Related: `docs/spec.md`, `docs/data-quality.md`, `docs/decisions/`
 
@@ -96,7 +96,8 @@ Notes:
 | V3 | V2 + reranking | 8 |
 | V4 | V3 + confidence-gated Jev decisions | 12 |
 
-The search version is configurable and reported in every search response, so
+**Milestone 3 implemented V0** (`search_version = "v0_lexical"`): PostgreSQL FTS only, see
+`docs/search-v0-baseline.md`. The search version is configurable and reported in every search response, so
 versions can be compared on the same catalog and Golden Dataset.
 
 Evaluation order: Milestones 3 to 8 use provisional, non-authoritative smoke
@@ -162,14 +163,27 @@ outcomes, each row carrying the reviewed `product_content_sha256` and the sample
 hash). All attributes are typed columns; there is no JSONB attribute bag. Dataset versions are
 validated positive integers (CHECK) so ordering is numeric. Enumerated values
 are TEXT plus named CHECK constraints, kept equal to `catalog/taxonomy.py` by tests.
-`storage_type` and `storage_interface` are separate (see `docs/spec.md` §14, item 9). Only
-constraint-backing indexes exist; search indexes belong to later milestones. There are no
-embedding, tsvector or inferred-decision tables.
+`storage_type` and `storage_interface` are separate (see `docs/spec.md` §14, item 9). Milestone 2 created only
+constraint-backing indexes (Milestone 3 adds one GIN search index, below). There are no
+embedding or inferred-decision tables.
+
+#### Milestone 3 implementation
+
+`product_search_documents` (`models/search.py`, migration `0003`): one row per product with
+`product_id` (PK, FK to `products`), `document_version`, `source_content_sha256` (the product's
+`content_sha256` when built), a weighted `search_vector` (`tsvector`) and `built_at`, plus a GIN
+index. It is a **derived, rebuildable** table (nothing in it is a source of truth) and there is no
+search column on `products`. Documents are built by `search/documents.py` from validated catalog
+fields only, written by ingestion inside the same transaction and by the explicit
+`python -m ecommerce_search.search reindex --database NAME`. Writers take one advisory lock
+(`search/indexing.py`), always after any dataset lock. Migration `0003` is schema only.
 
 ### 5.2 Search representations
 
-- Lexical: an FTS `tsvector` generated from approved text fields, with an
-  appropriate index (Milestone 3).
+- Lexical (**implemented in Milestone 3**): the weighted `tsvector` above, `simple` FTS
+  configuration, `DOCUMENT_VERSION` "1" (a version bump is required when the builder, the
+  section-to-weight assignment or the configuration changes), GIN index. Queries use
+  `plainto_tsquery` (strict AND) and `ts_rank`.
 - Dense: a pgvector column plus embedding metadata: model name, revision,
   dimensions, normalization, catalog version and generation timestamp
   (ADR-004).
@@ -260,7 +274,7 @@ generated reports. The fields each experiment record carries are listed in
 | Endpoint | Milestone |
 |---|---|
 | `GET /health` | 1 |
-| `GET /search?q=...`, `POST /search` | 3 onward |
+| `GET /search?q=...`, `POST /search` | 3 (V0 lexical implemented; later milestones add response fields as they become real) |
 | `POST /listings/analyze`, `POST /listings/normalize` | 13–14 (provisional) |
 | `GET /reviews/pending`, `POST /reviews/{review_id}/decision` | Listing milestones (provisional) |
 

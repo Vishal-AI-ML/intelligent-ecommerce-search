@@ -6,6 +6,7 @@ from fastapi import FastAPI
 
 from ecommerce_search import __version__
 from ecommerce_search.api.health import router as health_router
+from ecommerce_search.api.search import router as search_router
 from ecommerce_search.config import Settings, get_settings
 from ecommerce_search.db.engine import create_db_engine, create_session_factory
 
@@ -40,4 +41,5 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     app = FastAPI(title="Intelligent E-commerce Search", version=__version__, lifespan=lifespan)
     app.include_router(health_router)
+    app.include_router(search_router)
     return app

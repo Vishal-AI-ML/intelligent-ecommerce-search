@@ -64,18 +64,29 @@ def test_revision_0001_creates_no_catalog_tables(settings, scratch_database, mig
     assert _extension_version(settings, scratch_database) is not None
 
 
-def test_head_creates_the_m2_catalog_tables(settings, scratch_database, migrator):
+M2_TABLES = [
+    "alembic_version",
+    "catalog_datasets",
+    "catalog_reviews",
+    "headphone_specs",
+    "laptop_specs",
+    "phone_specs",
+    "products",
+    "raw_catalog_records",
+    "shoe_specs",
+]
+
+
+def test_revision_0002_creates_the_m2_catalog_tables_and_no_search_table(
+    settings, scratch_database, migrator
+):
+    migrator.upgrade(scratch_database, "0002")
+    assert _public_tables(settings, scratch_database) == sorted(M2_TABLES)
+
+
+def test_head_adds_only_the_m3_search_documents_table(settings, scratch_database, migrator):
+    # M3 intentionally supersedes the M2 expectation that head has no search table.
     migrator.upgrade(scratch_database)
     assert _public_tables(settings, scratch_database) == sorted(
-        [
-            "alembic_version",
-            "catalog_datasets",
-            "catalog_reviews",
-            "headphone_specs",
-            "laptop_specs",
-            "phone_specs",
-            "products",
-            "raw_catalog_records",
-            "shoe_specs",
-        ]
+        [*M2_TABLES, "product_search_documents"]
     )

@@ -29,6 +29,9 @@ class QualityReport:
     checks: tuple[dict, ...]
     findings: tuple[Finding, ...]
     statistics: Mapping
+    # Database audits record the search-index configuration and counts they audited. File
+    # reports have no stored search index, so the section states that it is not applicable.
+    search_index: Mapping | None = None
 
     @property
     def error_count(self) -> int:
@@ -63,9 +66,18 @@ class QualityReport:
             },
             "checks": list(self.checks),
             "statistics": dict(self.statistics),
+            "search_index": dict(self.search_index)
+            if self.search_index is not None
+            else {"applicable": False, "reason": SEARCH_INDEX_FILE_REASON},
             "parameters": qp.parameters_as_dict(),
             "findings": [f.to_dict() for f in self.findings],
         }
+
+
+SEARCH_INDEX_FILE_REASON = (
+    "Not applicable for file reports: no stored search index exists; search documents are "
+    "audited by database audits only."
+)
 
 
 def _status(severity: Severity, outcome: CheckOutcome) -> str:
@@ -101,6 +113,7 @@ def build_report(
     total_records: int,
     dataset_synthetic: Mapping[str, bool],
     external: Mapping[str, CheckOutcome],
+    search_index: Mapping | None = None,
 ) -> QualityReport:
     empty = (
         Finding(
@@ -137,6 +150,7 @@ def build_report(
         checks=tuple(checks),
         findings=tuple(sorted(findings, key=Finding.sort_key)),
         statistics=_statistics(records),
+        search_index=search_index,
     )
 
 
@@ -175,6 +189,9 @@ def to_markdown(report: QualityReport, generated_at: str | None = None) -> str:
     notes = [c for c in d["checks"] if c["note"]]
     if notes:
         lines += ["", "Notes:", ""] + [f"- `{c['name']}`: {c['note']}" for c in notes]
+    lines += ["", "## Search index", ""]
+    for key, value in d["search_index"].items():
+        lines.append(f"- {key}: {value}")
     lines += ["", "## Statistics", "", "```json", json.dumps(d["statistics"], indent=2), "```"]
     lines += [
         "",

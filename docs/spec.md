@@ -155,6 +155,12 @@ measured against human-reviewed evaluation data.
 - FR-API-2: Search responses include metadata: search version, decision
   provider, reranker state, latency, result count and the safe filters that
   were actually applied.
+- FR-API-2 status (Milestone 3): the V0 response carries only metadata that exists and is
+  truthful: `search_version`, `document_version`, requested `top_k`, `result_count` (results in
+  this response, not total matches), the generated `tsquery`, `applied_filters` (always empty in
+  V0) and `latency_ms` (`lexical_ms`, `total_ms`). Decision provider, reranker state and parsed
+  query are **not** returned yet; they are added when those components exist (additive, no
+  placeholders).
 - FR-API-3: Listing endpoints (`POST /listings/analyze`,
   `POST /listings/normalize`, `GET /reviews/pending`,
   `POST /reviews/{review_id}/decision`) are deferred to their milestones.

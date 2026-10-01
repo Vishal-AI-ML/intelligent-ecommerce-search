@@ -96,7 +96,10 @@ def test_constraint_and_index_names_match_models_and_limits(migrated_engine):
     assert all(len(name) <= 63 for name in actual)
 
 
-def test_only_constraint_backing_indexes_exist(migrated_engine):
+def test_only_constraint_backing_indexes_exist_plus_the_m3_gin_index(migrated_engine):
+    # M3 intentionally adds exactly one non-constraint index (GIN on the search vector) and one
+    # tsvector column. Everything else is still a btree index backing a PK/unique constraint.
+    gin_name = "ix_product_search_documents_search_vector"
     with migrated_engine.connect() as conn:
         rows = conn.execute(
             text(
@@ -112,19 +115,21 @@ def test_only_constraint_backing_indexes_exist(migrated_engine):
                 )
             ).scalars()
         )
-        column_types = set(
+        columns = set(
             conn.execute(
                 text(
-                    "SELECT DISTINCT data_type FROM information_schema.columns WHERE table_schema='public'"
+                    "SELECT DISTINCT table_name || '.' || column_name FROM information_schema.columns "
+                    "WHERE table_schema='public' AND data_type IN ('tsvector', 'USER-DEFINED', 'jsonb', 'json')"
                 )
             ).scalars()
         )
     assert rows
-    assert {name for name, _ in rows} == {
-        n for n in constraint_names if not n.startswith("alembic")
-    }
-    assert all(re.search(r"USING btree", definition) for _, definition in rows)
-    assert not column_types & {"tsvector", "USER-DEFINED", "jsonb", "json"}
+    names = {name for name, _ in rows}
+    assert names - {gin_name} == {n for n in constraint_names if not n.startswith("alembic")}
+    definitions = dict(rows)
+    assert re.search(r"USING gin \(search_vector\)", definitions[gin_name])
+    assert all(re.search(r"USING btree", d) for n, d in rows if n != gin_name)
+    assert columns == {"product_search_documents.search_vector"}  # no vector/JSON column anywhere
 
 
 def test_database_check_values_equal_application_taxonomies(migrated_engine):
@@ -431,7 +436,7 @@ def test_model_and_migration_constraint_definitions_are_identical(settings):
     config = Config("alembic.ini")
     config.attributes["database"] = "offline_sql_only"  # offline mode never connects
     config.output_buffer = io.StringIO()
-    command.upgrade(config, "0001:0002", sql=True)
+    command.upgrade(config, "0001:0003", sql=True)  # M3: the model now includes 0003
     migration = _constraint_definitions(config.output_buffer.getvalue())
 
     model = {}
