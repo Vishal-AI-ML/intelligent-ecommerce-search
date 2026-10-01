@@ -1,0 +1,511 @@
+{
+  "schema_version": 2,
+  "evidence_kind": "catalog-human-review",
+  "review_batch_id": "synthetic-seed-v1-c90b5cd0a3a7",
+  "manifest_sha256": "c90b5cd0a3a753939ee999447cf4b03742f6b96b90def3b05f7b90bd0cdb19cd",
+  "dataset_id": "synthetic-seed",
+  "dataset_version": "1",
+  "dataset_checksum_sha256": "2c1c5fa43eec5f7346df40c17e57c07f6594ab1833c5d9d4c862e6d2e8bbbbc8",
+  "manifest": {
+    "manifest_kind": "catalog-review-sample",
+    "manifest_schema_version": 3,
+    "dataset_id": "synthetic-seed",
+    "dataset_version": "1",
+    "dataset_checksum_sha256": "2c1c5fa43eec5f7346df40c17e57c07f6594ab1833c5d9d4c862e6d2e8bbbbc8",
+    "is_synthetic": true,
+    "sample_seed": "m2-review-sample-v1",
+    "selection_version": "1",
+    "selection_method": "per category: (1) products with warning findings, ordered by sha256(seed:product_id), up to half the quota; (2) then one product per brand not yet represented, brands ordered by sha256(seed:brand), product with the smallest hash; (3) then fill by smallest sha256(seed:product_id)",
+    "rules_version": "1",
+    "taxonomy_version": "1",
+    "transform_version": "1",
+    "quotas": {
+      "laptop": 10,
+      "phone": 10,
+      "shoes": 8,
+      "headphones": 8
+    },
+    "product_ids": [
+      "SYN-LAP-0001",
+      "SYN-LAP-0014",
+      "SYN-LAP-0015",
+      "SYN-LAP-0057",
+      "SYN-LAP-0059",
+      "SYN-LAP-0061",
+      "SYN-LAP-0062",
+      "SYN-LAP-0070",
+      "SYN-LAP-0074",
+      "SYN-LAP-0079",
+      "SYN-PHN-0006",
+      "SYN-PHN-0011",
+      "SYN-PHN-0028",
+      "SYN-PHN-0038",
+      "SYN-PHN-0044",
+      "SYN-PHN-0049",
+      "SYN-PHN-0052",
+      "SYN-PHN-0053",
+      "SYN-PHN-0055",
+      "SYN-PHN-0057",
+      "SYN-SHO-0011",
+      "SYN-SHO-0014",
+      "SYN-SHO-0017",
+      "SYN-SHO-0020",
+      "SYN-SHO-0032",
+      "SYN-SHO-0033",
+      "SYN-SHO-0034",
+      "SYN-SHO-0041",
+      "SYN-HDP-0011",
+      "SYN-HDP-0012",
+      "SYN-HDP-0021",
+      "SYN-HDP-0027",
+      "SYN-HDP-0034",
+      "SYN-HDP-0040",
+      "SYN-HDP-0046",
+      "SYN-HDP-0048"
+    ],
+    "products": [
+      {
+        "product_id": "SYN-LAP-0001",
+        "content_sha256": "4a4e67302221af831cf0fce092df59cfdedeac9c99db0f2449ebc5a4f9f252d5",
+        "row_sha256": "e6b815bc0e8357121bb44aacfdfebbe3c05099eb25a3deba382398c25c81d7d9"
+      },
+      {
+        "product_id": "SYN-LAP-0014",
+        "content_sha256": "7812f13eb8d7243d80c1c216e4066b6eefd0ee333af9515a82c7da42f8a7c7c7",
+        "row_sha256": "921a0fe6b0ff39e58e8ea358f1da82982639b7c6e2d07c545a928c41e45059c2"
+      },
+      {
+        "product_id": "SYN-LAP-0015",
+        "content_sha256": "a11829cab11f53e1d1d7eb46aca96874dd86e812ceceedb9f9f3ac317121aae2",
+        "row_sha256": "733aa7ae15e3aab5bbeb28be1d8ea0666bfdb0cff3c0ff7ba714d6e94f9604d2"
+      },
+      {
+        "product_id": "SYN-LAP-0057",
+        "content_sha256": "720c98c918c2c4844e7b9eb572cc3028bca06a44597597e84e740cffb2783166",
+        "row_sha256": "5d6adf14959f42cc8c4e5e7fa657dd326efce9c58483a5a60dfd175b62eab576"
+      },
+      {
+        "product_id": "SYN-LAP-0059",
+        "content_sha256": "4846bde903cb813cc140727f077df7e639bc3b998e927211a3d44c3152f7afa5",
+        "row_sha256": "0b50c5ca0d467e9aef12680d556b446dc838890ef206f33bb47e8c5d1c905278"
+      },
+      {
+        "product_id": "SYN-LAP-0061",
+        "content_sha256": "e430765d47790248d225d48ac26bda2d9d9f4b2f0454f6c85b770d5484012dd6",
+        "row_sha256": "c5be5c7c7bf9a3563c91fbf7b849296406515669f3679d100c766a14ebd87f5f"
+      },
+      {
+        "product_id": "SYN-LAP-0062",
+        "content_sha256": "55de351e0bd97801e72f9242fbcf5451bae72990c3c4a3fd4255ac9facf976dc",
+        "row_sha256": "afcce258122489163500d086bfdc8c45d0897eae7ecbe872b74aa3f045757de5"
+      },
+      {
+        "product_id": "SYN-LAP-0070",
+        "content_sha256": "a0bb295550ec8d6c60c731c361b14489007c6cc1ca36b5633464bbeea0574940",
+        "row_sha256": "d0af48d048acb716ef75f9c21e3494938a2a4c003f680d9f8afaa5f4a1dc1c99"
+      },
+      {
+        "product_id": "SYN-LAP-0074",
+        "content_sha256": "c1850536a8356420a35ff4edc426df4aad08abd38f68c622410c964eb50a91cd",
+        "row_sha256": "32c3a6327f4d46586bcb844deffa09d61321e347a485af02ffca4543ad517a29"
+      },
+      {
+        "product_id": "SYN-LAP-0079",
+        "content_sha256": "624ab0a23127603c3067be17095dd606f1feebc0970366e79e7a48b232ce12a6",
+        "row_sha256": "8a853b38d31c7c4453a30890f84c122e86c3dffac85ecd59ee0cd616722dce42"
+      },
+      {
+        "product_id": "SYN-PHN-0006",
+        "content_sha256": "8fdc8440f92946a92b1e4d92adc77e7bd6cc92da71c4cd48eabb2fa879afd6a0",
+        "row_sha256": "03011587d2a963fa66914a96b521d50ee34caf4a48ca6c11c9a51f2d61e98aac"
+      },
+      {
+        "product_id": "SYN-PHN-0011",
+        "content_sha256": "7d6adcd62ec5bb0bbbd25dae6ad77521d0d3452d6c59aa539dc3aaad76ef35da",
+        "row_sha256": "454d46ef725e3a2f7e307728c1ae4c567d6227c3418614047ca7a61319ae2098"
+      },
+      {
+        "product_id": "SYN-PHN-0028",
+        "content_sha256": "1dc7e41b92812f442cdc770bd384cd05445d7306fa905ef332bea386a6b146d4",
+        "row_sha256": "bd6a9b84e89a958698db54b17b662b9b4e5a4a4b46d34cf0ac92441b7237001b"
+      },
+      {
+        "product_id": "SYN-PHN-0038",
+        "content_sha256": "60a06bef97ea3678d1b22ba25bb8d06751524a471b60edf88e55465c6e93425a",
+        "row_sha256": "413959a748dc7ef1cb4a5db8400b97c6c9c10b761bf68f92c5c2d5c0fff96284"
+      },
+      {
+        "product_id": "SYN-PHN-0044",
+        "content_sha256": "64b14506f524864dc3dcbdfbea9229d9d6a203d1e906b3a8831daf1ffe22cbf0",
+        "row_sha256": "dd088a85a38c685d2f27605292dec90ba40fad7e7c16e85ae5142d1219cd4435"
+      },
+      {
+        "product_id": "SYN-PHN-0049",
+        "content_sha256": "0f7029f558f91427f265081ff143a1c71bb22724a3a6f41180dbe5a1911f8012",
+        "row_sha256": "ccf91fdd1a3ef69f7c795db800f958070ab0cd0535b344e8673f25caa4a14520"
+      },
+      {
+        "product_id": "SYN-PHN-0052",
+        "content_sha256": "86d5df54691cf7d5c2d10d1414d080a983741a407a50b27ff32a2cc9f3cd449c",
+        "row_sha256": "f49a6eeb3b537ef19b9ef9c74e1376ddb79a6a8878025ca4500427d1f6d09bbf"
+      },
+      {
+        "product_id": "SYN-PHN-0053",
+        "content_sha256": "72fb53a441aa9db3f37c0b0971cf296010e5da0ad7e6b4334ac50be8404ae234",
+        "row_sha256": "0c1dcc145cc0a23c579e991b749a9eeae9d14483b0567b7d13087f63081a3345"
+      },
+      {
+        "product_id": "SYN-PHN-0055",
+        "content_sha256": "bbdf4e9ea512839a36a21978d684d34132733af3bc235c5aa02965bfea950631",
+        "row_sha256": "3e029fa352b898b457a0df9dd7e99d2b100a5e4af089f2599abb15aa7f30a517"
+      },
+      {
+        "product_id": "SYN-PHN-0057",
+        "content_sha256": "df05e1047a3ef63e8c90e188f501a73ef8760c1d35fd7d115674ee546244ef8c",
+        "row_sha256": "6330e48df8c500aeb014964fc787b4f8e7f729aff32fe757c7ec2326324f11b1"
+      },
+      {
+        "product_id": "SYN-SHO-0011",
+        "content_sha256": "a54ad30281971d9f396e64d293f44a38786b7a55baf0ddb43378a132f2f66a07",
+        "row_sha256": "25c45a44ca81aa2fda531a5b70062d7b1376426472e982ceb3dfddfa4e37f744"
+      },
+      {
+        "product_id": "SYN-SHO-0014",
+        "content_sha256": "ab4e932757b06a911a7b17089e5743c6428f71f062492108ead3691b13217545",
+        "row_sha256": "dcb45a8302ad4e9134d063e864652a781b158d40568a8a56ee5662968c3dfa31"
+      },
+      {
+        "product_id": "SYN-SHO-0017",
+        "content_sha256": "2e77f5699acfc3b0fefce0a0bbfedf63e7c93fd54381c8869cc5c30f56fbbc3d",
+        "row_sha256": "4ddc1ac84f3e232f6e4934e63c04443355ab0076ae94799f82c0d1fa1442dd96"
+      },
+      {
+        "product_id": "SYN-SHO-0020",
+        "content_sha256": "96a27f98bf30fa116b5b8965e5c26cdd446833ca91af8b5c34c530f861934dd5",
+        "row_sha256": "48541d6e4bc6b9a647bfaf0472c9137a1ed1ce5a15c45fffa0fa01fb469dcab4"
+      },
+      {
+        "product_id": "SYN-SHO-0032",
+        "content_sha256": "357b1dc4ea2a1cf7582cfd6054eb6f34b2558e6992e88c0e41800d882f3ecfee",
+        "row_sha256": "158825436404f6239ff76ec97ca461bdc85e803f7c343a3bb525c3b3d29a9e4c"
+      },
+      {
+        "product_id": "SYN-SHO-0033",
+        "content_sha256": "8f9945dbff54ae8165f45578dd0ea6d9dce8bb523b5e786872bc12ff2dfe6b0a",
+        "row_sha256": "c20bf627ab1306b8ee9dea29b2619b75e34525507d878a2ddaf38dc75ac3fd23"
+      },
+      {
+        "product_id": "SYN-SHO-0034",
+        "content_sha256": "f51f75d7da6a131d14b2e22dd2b4f25f6244a815d6c9f56fdc30956933415f07",
+        "row_sha256": "24384eb9e7c92597d3ae077ef45592b50831059f7dbf0812af04ad9c404d68c3"
+      },
+      {
+        "product_id": "SYN-SHO-0041",
+        "content_sha256": "f9673c6f40a9b98ebbeed26441c56cd19ef269e106ba247f2d9fa6860a29170e",
+        "row_sha256": "0b45a2feaf2d56700f227e66b498f34ca4460887c3c975a0818d055a14de0f4f"
+      },
+      {
+        "product_id": "SYN-HDP-0011",
+        "content_sha256": "78cc2dbc6e06c0ee0a941464ca0211fee8fae945a7c6f722f2bc076e6f521ee3",
+        "row_sha256": "c65c64237aac72f1dbba2f16c09a8c4e63d58d77b08fed7144f83d9bbed63ddc"
+      },
+      {
+        "product_id": "SYN-HDP-0012",
+        "content_sha256": "69252ff65ea8b4e023cd2724b3ae0d1973e888b0afe0b38099b998e65053ac1b",
+        "row_sha256": "9f3f9e53f9b683bd78f18c1f94d2ec47a363a8e832801bf5b391764aabea3827"
+      },
+      {
+        "product_id": "SYN-HDP-0021",
+        "content_sha256": "22d195461065f5e7defafbe0718e1617e5e9b79b311b172235e6ff872affea06",
+        "row_sha256": "f154b789a1c14a6ea66e21946cd39cc4d58074ee6f1b50b9e0b6858a4fa88c13"
+      },
+      {
+        "product_id": "SYN-HDP-0027",
+        "content_sha256": "25411c991549fbdd4aee7c1a9384022a5c12fbae797cd7f180ae6c47a7b26f26",
+        "row_sha256": "571d8979368ba3e8e45be16fb095b29b87093e3b8caa612018d40970749523da"
+      },
+      {
+        "product_id": "SYN-HDP-0034",
+        "content_sha256": "3cfbaff7015130c6548802f495795c9061a6f8ce6a99f10b5d09f71f872769b7",
+        "row_sha256": "9667f8b45f53c8c116d73518e4c76b46c37816d4cf24208693986a43d6c09f23"
+      },
+      {
+        "product_id": "SYN-HDP-0040",
+        "content_sha256": "afc54c4c1b8e11668dc78f1a20736241c2cc56b8205d3960953347024b5d56da",
+        "row_sha256": "79225d58f2e439fe5f8e93343a9afd117a3720e0c1200ffc942d6c77a4d18833"
+      },
+      {
+        "product_id": "SYN-HDP-0046",
+        "content_sha256": "7c7e90ca23a41363d8289eee1dc076ee1648093d6fa12cb66c76b9d4d28f1569",
+        "row_sha256": "1d866013e5c1cb229fddef5c787f748f5b4a69515e6538de5f6674c46dfdd725"
+      },
+      {
+        "product_id": "SYN-HDP-0048",
+        "content_sha256": "99b337c4e224b79665d64e853036b03284301fc381a92974629a5047ac51f27a",
+        "row_sha256": "1fd1d2b3b2140992e68555e2f0cb4e0ead423348fcc503b9b0d8610f66c3ba73"
+      }
+    ],
+    "manifest_sha256": "c90b5cd0a3a753939ee999447cf4b03742f6b96b90def3b05f7b90bd0cdb19cd",
+    "review_batch_id": "synthetic-seed-v1-c90b5cd0a3a7"
+  },
+  "reviewer_handle": "Vishal",
+  "recorded_at": "2026-10-01T06:34:08Z",
+  "product_count": 36,
+  "reviews": [
+    {
+      "product_id": "SYN-LAP-0001",
+      "product_content_sha256": "4a4e67302221af831cf0fce092df59cfdedeac9c99db0f2449ebc5a4f9f252d5",
+      "verdict": "accept",
+      "issue_fields": null,
+      "notes": null
+    },
+    {
+      "product_id": "SYN-LAP-0014",
+      "product_content_sha256": "7812f13eb8d7243d80c1c216e4066b6eefd0ee333af9515a82c7da42f8a7c7c7",
+      "verdict": "accept",
+      "issue_fields": null,
+      "notes": null
+    },
+    {
+      "product_id": "SYN-LAP-0015",
+      "product_content_sha256": "a11829cab11f53e1d1d7eb46aca96874dd86e812ceceedb9f9f3ac317121aae2",
+      "verdict": "accept",
+      "issue_fields": null,
+      "notes": null
+    },
+    {
+      "product_id": "SYN-LAP-0057",
+      "product_content_sha256": "720c98c918c2c4844e7b9eb572cc3028bca06a44597597e84e740cffb2783166",
+      "verdict": "accept",
+      "issue_fields": null,
+      "notes": null
+    },
+    {
+      "product_id": "SYN-LAP-0059",
+      "product_content_sha256": "4846bde903cb813cc140727f077df7e639bc3b998e927211a3d44c3152f7afa5",
+      "verdict": "accept",
+      "issue_fields": null,
+      "notes": null
+    },
+    {
+      "product_id": "SYN-LAP-0061",
+      "product_content_sha256": "e430765d47790248d225d48ac26bda2d9d9f4b2f0454f6c85b770d5484012dd6",
+      "verdict": "accept",
+      "issue_fields": null,
+      "notes": null
+    },
+    {
+      "product_id": "SYN-LAP-0062",
+      "product_content_sha256": "55de351e0bd97801e72f9242fbcf5451bae72990c3c4a3fd4255ac9facf976dc",
+      "verdict": "accept",
+      "issue_fields": null,
+      "notes": null
+    },
+    {
+      "product_id": "SYN-LAP-0070",
+      "product_content_sha256": "a0bb295550ec8d6c60c731c361b14489007c6cc1ca36b5633464bbeea0574940",
+      "verdict": "accept",
+      "issue_fields": null,
+      "notes": null
+    },
+    {
+      "product_id": "SYN-LAP-0074",
+      "product_content_sha256": "c1850536a8356420a35ff4edc426df4aad08abd38f68c622410c964eb50a91cd",
+      "verdict": "accept",
+      "issue_fields": null,
+      "notes": null
+    },
+    {
+      "product_id": "SYN-LAP-0079",
+      "product_content_sha256": "624ab0a23127603c3067be17095dd606f1feebc0970366e79e7a48b232ce12a6",
+      "verdict": "accept",
+      "issue_fields": null,
+      "notes": null
+    },
+    {
+      "product_id": "SYN-PHN-0006",
+      "product_content_sha256": "8fdc8440f92946a92b1e4d92adc77e7bd6cc92da71c4cd48eabb2fa879afd6a0",
+      "verdict": "accept",
+      "issue_fields": null,
+      "notes": null
+    },
+    {
+      "product_id": "SYN-PHN-0011",
+      "product_content_sha256": "7d6adcd62ec5bb0bbbd25dae6ad77521d0d3452d6c59aa539dc3aaad76ef35da",
+      "verdict": "accept",
+      "issue_fields": null,
+      "notes": null
+    },
+    {
+      "product_id": "SYN-PHN-0028",
+      "product_content_sha256": "1dc7e41b92812f442cdc770bd384cd05445d7306fa905ef332bea386a6b146d4",
+      "verdict": "accept",
+      "issue_fields": null,
+      "notes": null
+    },
+    {
+      "product_id": "SYN-PHN-0038",
+      "product_content_sha256": "60a06bef97ea3678d1b22ba25bb8d06751524a471b60edf88e55465c6e93425a",
+      "verdict": "accept",
+      "issue_fields": null,
+      "notes": null
+    },
+    {
+      "product_id": "SYN-PHN-0044",
+      "product_content_sha256": "64b14506f524864dc3dcbdfbea9229d9d6a203d1e906b3a8831daf1ffe22cbf0",
+      "verdict": "accept",
+      "issue_fields": null,
+      "notes": null
+    },
+    {
+      "product_id": "SYN-PHN-0049",
+      "product_content_sha256": "0f7029f558f91427f265081ff143a1c71bb22724a3a6f41180dbe5a1911f8012",
+      "verdict": "accept",
+      "issue_fields": null,
+      "notes": null
+    },
+    {
+      "product_id": "SYN-PHN-0052",
+      "product_content_sha256": "86d5df54691cf7d5c2d10d1414d080a983741a407a50b27ff32a2cc9f3cd449c",
+      "verdict": "accept",
+      "issue_fields": null,
+      "notes": null
+    },
+    {
+      "product_id": "SYN-PHN-0053",
+      "product_content_sha256": "72fb53a441aa9db3f37c0b0971cf296010e5da0ad7e6b4334ac50be8404ae234",
+      "verdict": "accept",
+      "issue_fields": null,
+      "notes": null
+    },
+    {
+      "product_id": "SYN-PHN-0055",
+      "product_content_sha256": "bbdf4e9ea512839a36a21978d684d34132733af3bc235c5aa02965bfea950631",
+      "verdict": "accept",
+      "issue_fields": null,
+      "notes": null
+    },
+    {
+      "product_id": "SYN-PHN-0057",
+      "product_content_sha256": "df05e1047a3ef63e8c90e188f501a73ef8760c1d35fd7d115674ee546244ef8c",
+      "verdict": "accept",
+      "issue_fields": null,
+      "notes": null
+    },
+    {
+      "product_id": "SYN-SHO-0011",
+      "product_content_sha256": "a54ad30281971d9f396e64d293f44a38786b7a55baf0ddb43378a132f2f66a07",
+      "verdict": "accept",
+      "issue_fields": null,
+      "notes": null
+    },
+    {
+      "product_id": "SYN-SHO-0014",
+      "product_content_sha256": "ab4e932757b06a911a7b17089e5743c6428f71f062492108ead3691b13217545",
+      "verdict": "accept",
+      "issue_fields": null,
+      "notes": null
+    },
+    {
+      "product_id": "SYN-SHO-0017",
+      "product_content_sha256": "2e77f5699acfc3b0fefce0a0bbfedf63e7c93fd54381c8869cc5c30f56fbbc3d",
+      "verdict": "accept",
+      "issue_fields": null,
+      "notes": null
+    },
+    {
+      "product_id": "SYN-SHO-0020",
+      "product_content_sha256": "96a27f98bf30fa116b5b8965e5c26cdd446833ca91af8b5c34c530f861934dd5",
+      "verdict": "accept",
+      "issue_fields": null,
+      "notes": null
+    },
+    {
+      "product_id": "SYN-SHO-0032",
+      "product_content_sha256": "357b1dc4ea2a1cf7582cfd6054eb6f34b2558e6992e88c0e41800d882f3ecfee",
+      "verdict": "accept",
+      "issue_fields": null,
+      "notes": null
+    },
+    {
+      "product_id": "SYN-SHO-0033",
+      "product_content_sha256": "8f9945dbff54ae8165f45578dd0ea6d9dce8bb523b5e786872bc12ff2dfe6b0a",
+      "verdict": "accept",
+      "issue_fields": null,
+      "notes": null
+    },
+    {
+      "product_id": "SYN-SHO-0034",
+      "product_content_sha256": "f51f75d7da6a131d14b2e22dd2b4f25f6244a815d6c9f56fdc30956933415f07",
+      "verdict": "accept",
+      "issue_fields": null,
+      "notes": null
+    },
+    {
+      "product_id": "SYN-SHO-0041",
+      "product_content_sha256": "f9673c6f40a9b98ebbeed26441c56cd19ef269e106ba247f2d9fa6860a29170e",
+      "verdict": "accept",
+      "issue_fields": null,
+      "notes": null
+    },
+    {
+      "product_id": "SYN-HDP-0011",
+      "product_content_sha256": "78cc2dbc6e06c0ee0a941464ca0211fee8fae945a7c6f722f2bc076e6f521ee3",
+      "verdict": "accept",
+      "issue_fields": null,
+      "notes": null
+    },
+    {
+      "product_id": "SYN-HDP-0012",
+      "product_content_sha256": "69252ff65ea8b4e023cd2724b3ae0d1973e888b0afe0b38099b998e65053ac1b",
+      "verdict": "accept",
+      "issue_fields": null,
+      "notes": null
+    },
+    {
+      "product_id": "SYN-HDP-0021",
+      "product_content_sha256": "22d195461065f5e7defafbe0718e1617e5e9b79b311b172235e6ff872affea06",
+      "verdict": "accept",
+      "issue_fields": null,
+      "notes": null
+    },
+    {
+      "product_id": "SYN-HDP-0027",
+      "product_content_sha256": "25411c991549fbdd4aee7c1a9384022a5c12fbae797cd7f180ae6c47a7b26f26",
+      "verdict": "accept",
+      "issue_fields": null,
+      "notes": null
+    },
+    {
+      "product_id": "SYN-HDP-0034",
+      "product_content_sha256": "3cfbaff7015130c6548802f495795c9061a6f8ce6a99f10b5d09f71f872769b7",
+      "verdict": "accept",
+      "issue_fields": null,
+      "notes": null
+    },
+    {
+      "product_id": "SYN-HDP-0040",
+      "product_content_sha256": "afc54c4c1b8e11668dc78f1a20736241c2cc56b8205d3960953347024b5d56da",
+      "verdict": "accept",
+      "issue_fields": null,
+      "notes": null
+    },
+    {
+      "product_id": "SYN-HDP-0046",
+      "product_content_sha256": "7c7e90ca23a41363d8289eee1dc076ee1648093d6fa12cb66c76b9d4d28f1569",
+      "verdict": "accept",
+      "issue_fields": null,
+      "notes": null
+    },
+    {
+      "product_id": "SYN-HDP-0048",
+      "product_content_sha256": "99b337c4e224b79665d64e853036b03284301fc381a92974629a5047ac51f27a",
+      "verdict": "accept",
+      "issue_fields": null,
+      "notes": null
+    }
+  ],
+  "audit_note": "Human-review evidence for a SYNTHETIC catalog sample. The reviewer handle and this file's Git history are an audit trail, not cryptographic proof of a human's identity.",
+  "privacy_rules": "Use a handle or pseudonym, never an email address. Do not put personal information, secrets or machine-specific paths in issue_fields or notes.",
+  "records_sha256": "a378ad9dbab3bfebaaf486eb130075c55c21d52d3bc0e0e9d5c115907d4c30c0"
+}

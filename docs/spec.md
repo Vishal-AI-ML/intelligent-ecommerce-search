@@ -470,7 +470,8 @@ human review, and evaluation is human-reviewed.
 
 ## 14. Open questions
 
-1. **Initial dataset:** undecided. See `docs/data-quality.md` §2.
+1. **Initial dataset:** decided in Milestone 2: a project-authored deterministic synthetic
+   seed catalog. See `docs/data-quality.md` §2.5.
 2. **`rrf_k`:** configurable. The initial value is unspecified. Milestone 5
    selects a provisional value, marked provisional. Milestone 10 re-evaluates
    on the human-reviewed Golden Dataset (ADR-002, section 9.1).
@@ -495,8 +496,14 @@ human review, and evaluation is human-reviewed.
    represented as an SSD subtype. Milestone 6 or 7 must decide. Either way, an
    explicit `ssd` query must not accidentally exclude NVMe SSDs, and a test
    must cover this.
+   **Milestone 2 schema decision (implemented):** `storage_type` (medium: `SSD`, `HDD`) and
+   `storage_interface` (`NVME`, `SATA`) are separate columns, and `NVME` requires
+   `storage_type = SSD` (a database CHECK). This settles the stored representation only. The
+   query-matching semantics (for example that an `ssd` query must include NVMe SSDs) remain
+   deferred to Milestone 6/7.
 10. **Borderline relevance mapping:** provisional and open until the
     annotation policy is approved (section 9.2).
 11. **Provisional, dataset-dependent values:** any numeric range, tolerance or
     duplicate threshold that depends on the chosen dataset is provisional
-    until Milestone 2 (`docs/data-quality.md` §3).
+    until Milestone 2 (`docs/data-quality.md` §3). **Milestone 2:** the values are chosen and
+    documented as provisional in `docs/data-quality.md` §3.1.

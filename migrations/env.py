@@ -3,6 +3,7 @@ from logging.config import fileConfig
 from alembic import context
 from sqlalchemy import create_engine, pool
 
+import ecommerce_search.models  # noqa: F401  (registers all tables on Base.metadata)
 from ecommerce_search.config import get_settings
 from ecommerce_search.db.base import Base
 

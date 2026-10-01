@@ -7,10 +7,15 @@ Development is organized milestone by milestone. See
 
 ## Current status
 
-Milestone 1 (Foundation) only: typed settings, FastAPI app with `GET /health`,
+Milestone 1 (Foundation): typed settings, FastAPI app with `GET /health`,
 PostgreSQL 16 + pgvector via Docker Compose, SQLAlchemy 2 (sync) with psycopg 3,
-and Alembic (one migration that enables the `vector` extension). There is no
-catalog, search or model code yet.
+and Alembic.
+
+Milestone 2 (Product catalog): **complete.** A product schema (migration `0002`), a
+deterministic **synthetic** seed catalog of 240 products (80 laptops, 60 phones, 50 shoes,
+50 headphones; not real marketplace data), atomic idempotent ingestion, automated quality
+checks and reports, and a recorded human review of a 36-product sample (see "Product catalog"
+below). There is no search, embedding or model code yet.
 
 ## Prerequisites
 
@@ -70,6 +75,81 @@ database you do not fully control.
 
 Stop with `docker compose down` (add `-v` only if you want to delete the database volume).
 
+## Product catalog (Milestone 2)
+
+All catalog records are **synthetic** (project-authored, deterministic). Nothing is scraped or
+downloaded. See `docs/data-quality.md` §2.5 for provenance.
+
+```bash
+uv run alembic upgrade head                      # creates the catalog tables (revision 0002)
+uv run python scripts/generate_seed_catalog.py --check   # seed regenerates byte-for-byte
+
+# commands that WRITE a database require an explicit --database (no default to POSTGRES_DB)
+uv run python -m ecommerce_search.catalog ingest --database <scratch>
+uv run python -m ecommerce_search.catalog review-import --database <scratch> ...   # humans only
+
+uv run python -m ecommerce_search.catalog check --file data/seed/catalog_seed_v1.jsonl  # offline
+uv run python -m ecommerce_search.catalog check --database <name>        # database audit
+uv run python -m ecommerce_search.catalog review-sample                  # offline, blank sample
+uv run python -m ecommerce_search.catalog review-status                  # offline
+uv run python -m ecommerce_search.catalog review-verify                  # offline
+```
+
+* **Explicit targets.** `ingest` and `review-import` need `--database NAME` (argparse exits with
+  code 2 otherwise) and print `target database: NAME` before writing. A DB audit
+  (`check` without `--file`) also needs `--database`. Use a scratch database while developing;
+  never ingest into the development database without deciding to.
+* **Ingestion.** Input and provenance are validated before any engine or setting is touched.
+  Writes are one transaction guarded by a PostgreSQL advisory lock per dataset id.
+  Dataset versions are positive integers compared numerically. Re-running the same version and
+  checksum changes nothing; the same version with different bytes is refused; **an older
+  version than one already ingested is refused**; a reused version whose recorded provenance or
+  transform/taxonomy/rules versions differ is refused (use a new version); a newer version
+  upserts changed products and never deletes absent ones. An **empty catalog is an error**.
+* **Errors.** Expected failures (bad files, wrong encoding, database errors) print one concise
+  line and exit 1. Credentials, URLs and SQL parameters are never shown.
+* **Review sample.** `review-sample` writes a blank CSV, a manifest and instructions under
+  `data/processed/catalog_review/<batch>/` (git-ignored). It **refuses** if any of those files
+  exist; `--force` replaces only a provably blank, untouched sample and **never** a CSV with any
+  reviewer input. The manifest binds every sampled product's content hash and a hash of every
+  non-review CSV column, so only `verdict`, `issue_fields` and `notes` may be edited.
+* **Safe CSV editing.** Back the CSV up before editing. Edit only the three reviewer columns.
+  Save as **CSV UTF-8**. Never put an email address, personal information, secrets or machine
+  paths in `issue_fields` or `notes`, and use a short handle or pseudonym (never an email) as the
+  reviewer name.
+* **Evidence.** `review-import --reviewer <handle> --confirm-human-review` first checks that
+  the supplied manifest is **exactly** the sample the committed seed and the current sampling
+  code generate (a hand-crafted manifest is refused even if its hash is self-consistent), then
+  records the review in the append-only `catalog_reviews` table and writes
+  `data/labels/catalog_review_<dataset>_v<version>_<batch>.json`. That file **embeds the exact
+  reviewed manifest** (seed, selection method/version, quotas, rules/taxonomy/transform
+  versions, and each product's content and row hash) plus the outcomes and a canonical
+  self-hash, so it is self-contained. It is committed only after a real human review.
+  `review-verify` re-checks it offline against the committed seed, and `review-status` reports
+  `PENDING` (no evidence), `RECORDED 36/36` or `ERROR`. Historical validity does **not** depend
+  on today's rules, selection wording, quotas or seed: later sampling changes never invalidate
+  old evidence (comparison with current rules is the informational
+  `matches_current_sampling_rules` line). A changed seed checksum or product content, or any
+  edit to the evidence, still fails. Git history plus a reviewer handle are an **audit trail
+  and integrity check, not cryptographic proof** of a human's identity.
+* **Recorded review (Milestone 2).** The required representative human review is
+  **recorded: 36/36 products**, reviewer handle `Vishal`, all 36 verdicts `accept` (0
+  `needs_correction`, 0 `unsure`), covering 10 laptops, 10 phones, 8 shoes and 8 headphones.
+  Evidence: `data/labels/catalog_review_synthetic-seed_v1_c90b5cd0a3a7.json`
+  (file SHA-256 `302d725dcf399679977f55a3da98976aa499c003a5236a1772eae42b368e9265`; this is the hash of the file as written with LF line endings, and
+  verification itself uses the line-ending-independent canonical `records_sha256` inside the
+  file). `review-verify` and `review-status` succeed offline, without a database. The review is
+  bound to the exact dataset checksum, the embedded reviewed manifest and every product's
+  content hash. It is an integrity/audit artifact; Git history supplies attribution, and it is
+  **not cryptographic proof of the reviewer's identity**.
+* **What the review does and does not show.** The catalog is synthetic and internally
+  coherent. The review does not show real-market availability, pricing or product existence.
+  The seed produced zero automated warnings, so the actual sample was stratified by category
+  and brand, not by warning types (warnings-first selection is implemented and unit-tested
+  with injected findings).
+
+**Warning: downgrading revision `0002` drops all catalog tables and their data.**
+
 ## `GET /health`
 
 Readiness-oriented. Returns `200` with `status: "ok"` when PostgreSQL is
@@ -81,15 +161,18 @@ stack traces).
 ## Validate
 
 ```bash
+uv lock --check
 uv run ruff check .
 uv run ruff format --check .
-uv run pytest -m "not integration"     # unit + API tests, no Docker needed
+uv run pytest -m "not integration"     # unit + API tests, no Docker, no .env, no password
 docker compose up -d db
 uv run alembic upgrade head
 uv run pytest -m integration           # needs the compose database running
 docker compose config -q
 ```
 
+Unit tests are hermetic: they never read `.env` or ambient `POSTGRES_*` settings, and a
+regression test runs the whole unit suite with a blank password.
 Integration tests fail (they are not skipped) if the database is not running.
 They create and drop throwaway databases and never touch the development database.
 

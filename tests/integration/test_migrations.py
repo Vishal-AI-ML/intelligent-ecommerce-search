@@ -45,16 +45,37 @@ def test_downgrade_then_upgrade(settings, scratch_database, migrator):
     assert _extension_version(settings, scratch_database) is not None
 
 
-def test_migration_creates_no_tables(settings, scratch_database, migrator):
-    migrator.upgrade(scratch_database)
-    engine = create_engine(settings.database_url(database=scratch_database))
+def _public_tables(settings, database):
+    engine = create_engine(settings.database_url(database=database))
     try:
         with engine.connect() as conn:
-            tables = (
+            return sorted(
                 conn.execute(text("SELECT tablename FROM pg_tables WHERE schemaname = 'public'"))
                 .scalars()
                 .all()
             )
     finally:
         engine.dispose()
-    assert tables == ["alembic_version"]
+
+
+def test_revision_0001_creates_no_catalog_tables(settings, scratch_database, migrator):
+    migrator.upgrade(scratch_database, "0001")
+    assert _public_tables(settings, scratch_database) == ["alembic_version"]
+    assert _extension_version(settings, scratch_database) is not None
+
+
+def test_head_creates_the_m2_catalog_tables(settings, scratch_database, migrator):
+    migrator.upgrade(scratch_database)
+    assert _public_tables(settings, scratch_database) == sorted(
+        [
+            "alembic_version",
+            "catalog_datasets",
+            "catalog_reviews",
+            "headphone_specs",
+            "laptop_specs",
+            "phone_specs",
+            "products",
+            "raw_catalog_records",
+            "shoe_specs",
+        ]
+    )

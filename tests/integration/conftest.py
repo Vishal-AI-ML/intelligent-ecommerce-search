@@ -45,3 +45,12 @@ class Migrator:
 @pytest.fixture
 def migrator() -> Migrator:
     return Migrator(Config("alembic.ini"))
+
+
+@pytest.fixture
+def migrated_engine(settings, scratch_database, migrator):
+    """Engine on a throwaway database migrated to head. Never the development database."""
+    migrator.upgrade(scratch_database)
+    engine = create_engine(settings.database_url(database=scratch_database))
+    yield engine
+    engine.dispose()

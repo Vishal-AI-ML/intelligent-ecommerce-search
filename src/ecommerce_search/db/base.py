@@ -11,6 +11,6 @@ NAMING_CONVENTION = {
 
 
 class Base(DeclarativeBase):
-    """Declarative base. No tables are defined in Milestone 1."""
+    """Declarative base. Tables live in `ecommerce_search.models`."""
 
     metadata = MetaData(naming_convention=NAMING_CONVENTION)

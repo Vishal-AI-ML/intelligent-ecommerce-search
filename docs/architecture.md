@@ -151,6 +151,21 @@ design constraints, not the DDL.
 - Provenance: `source_type`, plus the dataset reference and a synthetic flag
   (see `docs/data-quality.md`).
 
+#### Milestone 2 implementation
+
+Implemented tables (`src/ecommerce_search/models/catalog.py`, migration `0002`):
+`catalog_datasets` (provenance, checksum, versions), `raw_catalog_records` (exact source line,
+never updated), `products` (normalized core fields), `laptop_specs`, `phone_specs`,
+`shoe_specs`, `headphone_specs` (typed attribute tables, 1:1 with a product, tied to the
+product's category by a composite foreign key) and `catalog_reviews` (append-only human review
+outcomes, each row carrying the reviewed `product_content_sha256` and the sample manifest
+hash). All attributes are typed columns; there is no JSONB attribute bag. Dataset versions are
+validated positive integers (CHECK) so ordering is numeric. Enumerated values
+are TEXT plus named CHECK constraints, kept equal to `catalog/taxonomy.py` by tests.
+`storage_type` and `storage_interface` are separate (see `docs/spec.md` §14, item 9). Only
+constraint-backing indexes exist; search indexes belong to later milestones. There are no
+embedding, tsvector or inferred-decision tables.
+
 ### 5.2 Search representations
 
 - Lexical: an FTS `tsvector` generated from approved text fields, with an
@@ -172,6 +187,11 @@ in Milestone 2 (catalog schema) and Milestone 13 (listing normalization).
 | Inferred | Model decisions with provider, model version, confidence, timestamp | Append-only |
 | Risk signals | Triage signals with criteria version | Append-only |
 | Human outcomes | Reviewer decisions and labels with reviewer and timestamp | Append-only. Authoritative |
+
+Milestone 2 implements the raw layer (`raw_catalog_records`), the normalized layer (`products`
+and the spec tables) and the human-outcome layer for the catalog review sample
+(`catalog_reviews`, append-only via triggers). The inferred and risk-signal layers are not
+implemented yet.
 
 ### 5.4 Query understanding
 

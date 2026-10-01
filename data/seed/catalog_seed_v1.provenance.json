@@ -1,0 +1,15 @@
+{
+  "dataset_id": "synthetic-seed",
+  "dataset_version": "1",
+  "source_description": "Project-authored deterministic synthetic catalog produced by scripts/generate_seed_catalog.py (generator version 1). Every record is synthetic. There is no third-party source and no marketplace source.",
+  "rights_note": "Authored by this project for development and testing. Not scraped, downloaded or derived from Amazon, Flipkart or any other marketplace or dataset. Real brand names are used only as labels; series/model names, specifications, prices, ratings and sellers are invented, and no affiliation with any brand or marketplace is implied. No formal licence identifier has been assigned.",
+  "license_identifier": null,
+  "authored_on": "2026-09-30",
+  "generator": "scripts/generate_seed_catalog.py@1",
+  "is_synthetic": true,
+  "transform_version": "1",
+  "taxonomy_version": "1",
+  "notes": "Templated data is easier than real listings, so retrieval metrics computed on it will be optimistic. Prices are invented and are not market prices. About 10% of records use seller-style formatting variants (units, casing, whitespace, currency markers) to exercise normalization. Reproduce with: uv run python scripts/generate_seed_catalog.py --check. Counts by category: headphones=50, laptop=80, phone=60, shoes=50.",
+  "record_count": 240,
+  "checksum_sha256": "2c1c5fa43eec5f7346df40c17e57c07f6594ab1833c5d9d4c862e6d2e8bbbbc8"
+}
