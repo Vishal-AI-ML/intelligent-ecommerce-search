@@ -1,6 +1,6 @@
 # Architecture
 
-- Status: Milestone 0 design; implemented parts are marked per section (M1 foundation, M2 catalog, M3 lexical V0, M4 dense retrieval)
+- Status: Milestone 0 design; implemented parts are marked per section (M1 foundation, M2 catalog, M3 lexical V0, M4 dense retrieval, M5 hybrid V1)
 - Date: 2026-09-30
 - Related: `docs/spec.md`, `docs/data-quality.md`, `docs/decisions/`
 
@@ -103,6 +103,28 @@ versions can be compared on the same catalog and Golden Dataset.
 **Milestone 4 added dense-only retrieval** (`search_version = "dense_only"`, `GET`/`POST
 /search/dense`), which is a component, not a V-numbered version: V1 (lexical + dense + RRF) is
 Milestone 5. See `docs/search-dense-m4.md`.
+
+**Milestone 5 implemented V1** (`search_version = "v1_hybrid"`, `GET`/`POST /search/hybrid`;
+see `docs/search-hybrid-m5.md` and ADR-002). The implemented request flow has no query
+understanding, filters or reranker yet:
+
+```text
+validate query and top_k
+ -> load the model if needed, check the token limit, encode the query (no DB connection held)
+ -> one REPEATABLE READ READ ONLY transaction: lexical_search (50) + dense_search (50)
+ -> transaction ends
+ -> RRF over positional ranks (exact fractions; rrf_score desc, then product_id asc)
+ -> keep candidate_k = 50, return the first top_k with both source ranks and scores
+```
+
+Both source reads see one snapshot; the isolation level is set per transaction, so no engine
+or connection setting changes, and fusion and response building run after the transaction has
+ended. RRF uses equal source weights and `rrf_k = 100`, which is **provisional** (selected by a
+predeclared tie rule after every grid value tied; re-decided in Milestone 10). If the model or
+the database is unavailable the endpoint fails closed with the fixed 503 instead of returning
+lexical-only results. Missing or stale embeddings only shorten the dense list. No schema or
+index changed: V1 reads the M3 and M4 tables, and dense retrieval remains an exact scan.
+`/search` (V0) and `/search/dense` are unchanged.
 
 Evaluation order: Milestones 3 to 8 use provisional, non-authoritative smoke
 queries. Human-reviewed labels arrive in Milestone 9, and Milestone 10 re-runs
@@ -283,6 +305,10 @@ generated reports. The fields each experiment record carries are listed in
   `EMBEDDING_MODEL_REVISION` (must equal a reviewed registry entry; the default is the ADR-006
   pin), `EMBEDDING_MODELS_DIR` (default: the git-ignored repository `models/`; the `api`
   container uses its read-only `/models` mount) and `EMBEDDING_BATCH_SIZE`.
+- Milestone 5 settings: `SEARCH_CANDIDATE_K` (fused list length and maximum hybrid `top_k`,
+  default 50, at most `SEARCH_LEXICAL_K + SEARCH_DENSE_K`) and `SEARCH_RRF_K` (default 100,
+  provisional). Compose forwards both to the `api` service only. The hybrid source depths are
+  `SEARCH_LEXICAL_K` and `SEARCH_DENSE_K`.
 - Credentials only in environment variables. `.env` is git-ignored and only
   `.env.example` may be committed. Secrets are never logged.
 
@@ -296,6 +322,9 @@ generated reports. The fields each experiment record carries are listed in
 - Milestone 4 dense responses report `model_load_ms` (only when the model loaded in that
   request), `query_embedding_ms`, `vector_ms` and `total_ms`. `serialization_ms` is measured by
   the benchmark harness (timing `model_dump_json()` separately), as in M3, not by the API.
+- Milestone 5 hybrid responses add `rrf_ms` to `lexical_ms`, `model_load_ms`,
+  `query_embedding_ms`, `vector_ms` and `total_ms` (a stage that did not run is `null`), plus
+  the `fusion` block and the hit, overlap, fused and candidate counts.
 - Provider telemetry: provider, pinned model version, latency, raw provider
   probabilities and gate-confidence values (separate fields), fallback reason
   and returned cost where available.
@@ -309,6 +338,7 @@ generated reports. The fields each experiment record carries are listed in
 | `GET /health` | 1 |
 | `GET /search?q=...`, `POST /search` | 3 (V0 lexical implemented; later milestones add response fields as they become real) |
 | `GET /search/dense?q=...`, `POST /search/dense` | 4 (dense-only retrieval implemented; not a V-numbered version) |
+| `GET /search/hybrid?q=...`, `POST /search/hybrid` | 5 (V1 hybrid lexical + dense + RRF implemented; `rrf_k` provisional) |
 | `POST /listings/analyze`, `POST /listings/normalize` | 13–14 (provisional) |
 | `GET /reviews/pending`, `POST /reviews/{review_id}/decision` | Listing milestones (provisional) |
 

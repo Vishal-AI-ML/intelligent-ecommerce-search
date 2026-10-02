@@ -28,7 +28,13 @@ Milestone 4 (dense semantic retrieval): **implemented.** Local embeddings with t
 (migration `0004`, `vector(384)`), explicit `embed` / `embed-status` commands and
 `GET`/`POST /search/dense` (see "Dense search (Milestone 4)" below and
 `docs/search-dense-m4.md`). A measured benchmark kept the exact scan: no persistent ANN index at
-240 products. There is no hybrid retrieval (RRF) yet; that is Milestone 5.
+240 products. Hybrid retrieval (RRF) was added in Milestone 5.
+
+Milestone 5 (hybrid retrieval, **V1**): **implemented.** `GET`/`POST /search/hybrid` fuses the
+lexical and dense candidate lists with Reciprocal Rank Fusion and keeps both source ranks; no
+schema change. `rrf_k = 100` is **provisional** (see "Hybrid search (Milestone 5)" below,
+`docs/search-hybrid-m5.md` and ADR-002). `/search` remains V0 and `/search/dense` remains
+available.
 
 ## Prerequisites
 
@@ -298,6 +304,48 @@ curl -X POST http://127.0.0.1:8000/search/dense -H "Content-Type: application/js
 
 **Warning: downgrading revision `0004` drops the derived embedding table** (regenerate it with
 `embed`). `alembic downgrade base` still drops the pgvector extension and everything before it.
+
+## Hybrid search (Milestone 5)
+
+V1 hybrid retrieval (`search_version = "v1_hybrid"`): up to 50 lexical candidates (as
+`/search`) and up to 50 dense candidates (as `/search/dense`) are read from one read-only
+database snapshot and fused with Reciprocal Rank Fusion (equal weights, 1-based positional
+ranks, ties by `product_id`). The fused list keeps at most `SEARCH_CANDIDATE_K` (50) candidates
+and the response returns the first `top_k`. **No relevance or quality claim is made**: there is
+no Golden Dataset yet and the catalog is synthetic. Design, API contract, the provisional
+`rrf_k` selection, the lexical/dense/hybrid comparison and per-run latency are in
+`docs/search-hybrid-m5.md`; the decision record is
+[ADR-002](docs/decisions/ADR-002-hybrid-retrieval-rrf.md).
+
+Prerequisites: no new migration or command. Hybrid search needs exactly what the two earlier
+endpoints need: the database at revision `0004`, the catalog ingested with current lexical
+documents, the fetched MiniLM snapshot and current embeddings (see the required sequences in
+"Lexical search (Milestone 3)" and "Dense search (Milestone 4)" above). Check with
+`search status --database <db>` and `embed-status --database <db> --require-current`.
+
+```bash
+curl "http://127.0.0.1:8000/search/hybrid?q=noise+cancelling+headphones&top_k=5"
+curl -X POST http://127.0.0.1:8000/search/hybrid -H "Content-Type: application/json" -d '{"query": "apple phone", "top_k": 5}'
+```
+
+* **Metadata.** Every response reports a `fusion` block (`method: "rrf"`, `rrf_k`,
+  `rrf_k_status: "provisional"`, `lexical_k`, `dense_k`, `candidate_k`), the source and fused
+  counts (`lexical_hit_count`, `dense_hit_count`, `overlap_count`, `fused_count`,
+  `candidate_count`) and per result `rrf_score`, `lexical_rank`/`lexical_score` and
+  `dense_rank`/`dense_score` (null when the product is absent from that source). `latency_ms`
+  adds `rrf_ms` to the lexical and dense stage timings.
+* **Provisional `rrf_k`.** `SEARCH_RRF_K` defaults to 100. Every predeclared candidate value
+  tied on a deterministic proxy, and the predeclared rule took the largest; this is not
+  evidence that 100 is better. Milestone 10 re-decides it on the Golden Dataset.
+* **Validation and failures.** Text validation as `/search`; `top_k` is 1..`SEARCH_CANDIDATE_K`
+  (default 10). A query without any letter or digit returns no results without running the
+  model or the database. If the model snapshot is missing or cannot load, or the database
+  fails, the endpoint returns the fixed `503 {"detail": "search unavailable"}`: it never falls
+  back silently to lexical-only results. Missing or stale embeddings shorten the dense list, so
+  results may be incomplete.
+* **Limitations.** The dense side has no similarity threshold, so hybrid search returns results
+  even for nonsense queries; the model is English-only; scores are uncalibrated and not
+  probabilities.
 
 ## `GET /health`
 

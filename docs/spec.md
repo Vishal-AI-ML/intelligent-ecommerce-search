@@ -147,6 +147,15 @@ measured against human-reviewed evaluation data.
   (see ADR-002). Milestone 5 selects a provisional value, records it in
   configuration and marks it provisional (section 9.1). Source ranks and the
   fused score are preserved per result.
+- FR-RET-3 status (Milestone 5): **implemented** as V1 (`GET`/`POST /search/hybrid`,
+  `search_version = "v1_hybrid"`). The existing lexical and dense retrievers each return up to 50
+  candidates (`SEARCH_LEXICAL_K`, `SEARCH_DENSE_K`) from one read-only snapshot; RRF with equal
+  source weights uses their 1-based positional ranks, exact-fraction scores and a `product_id`
+  tie-break; the fused union is cut to `candidate_k = 50` (`SEARCH_CANDIDATE_K`) and the response
+  returns its first `top_k`. Every result keeps `lexical_rank`, `lexical_score`, `dense_rank` and
+  `dense_score` (null when absent from that source) and `rrf_score`. `rrf_k = 100` is
+  **provisional** (ADR-002); no schema change or ANN index was added
+  (`docs/search-hybrid-m5.md`). `/search` remains V0 and `/search/dense` remains available.
 - FR-RET-4 (V2): Safe structured filtering on category, brand, RAM, storage,
   storage type, minimum price and maximum price.
 - FR-RET-5 (V3): Optional configurable cross-encoder reranking with on/off
@@ -174,6 +183,15 @@ measured against human-reviewed evaluation data.
   `vector_ms`, `total_ms`). `dense_score` is cosine similarity, not a probability. A missing or
   unloadable model returns a fixed `503 {"detail": "search unavailable"}`; `/search` and
   `/health` are unchanged.
+- FR-API-2 status (Milestone 5): `GET`/`POST /search/hybrid` responses carry `search_version`
+  (`v1_hybrid`), `document_version`, `tsquery`, the embedding model metadata of
+  `/search/dense`, `distance_metric`, a `fusion` block (`method` `rrf`, `rrf_k`, `rrf_k_status`
+  `provisional`, `lexical_k`, `dense_k`, `candidate_k`), `dense_status`, `lexical_hit_count`,
+  `dense_hit_count`, `overlap_count`, `fused_count`, `candidate_count`, `top_k`, `result_count`,
+  `applied_filters` (always empty) and `latency_ms` (`lexical_ms`, `model_load_ms`,
+  `query_embedding_ms`, `vector_ms`, `rrf_ms`, `total_ms`). `top_k` is 1..`candidate_k`. If the
+  dense capability or the database is unavailable the endpoint fails closed with the same fixed
+  503; it never degrades silently to lexical-only results.
 - FR-API-3: Listing endpoints (`POST /listings/analyze`,
   `POST /listings/normalize`, `GET /reviews/pending`,
   `POST /reviews/{review_id}/decision`) are deferred to their milestones.
@@ -362,6 +380,10 @@ cannot produce authoritative quality numbers.
   Results from them are not reported as quality metrics.
 - Milestone 5 selects a provisional `rrf_k`, records it in configuration and
   marks it provisional. No `rrf_k` value is chosen in Milestone 0.
+  **Milestone 5 status:** `rrf_k = 100`, provisional. All seven predeclared grid values tied at
+  1.0 on a deterministic attribute-consistency proxy over 15 checked queries, and the
+  predeclared largest-tie rule selected 100. The proxy is not a quality metric and gives no
+  evidence that 100 is better (ADR-002, `docs/search-hybrid-m5.md`).
 - Human-reviewed, authoritative labels arrive in Milestone 9.
 - Milestone 10 re-runs V0 through V3 on the human-reviewed Golden Dataset.
 - Final reporting must distinguish provisional tuning from authoritative
@@ -420,6 +442,10 @@ reporting. Split sizes and results are not decided in Milestone 0.
   model). `serialization_ms` is measured by the benchmark harnesses (timing `model_dump_json()`
   separately), not reported by the API; a derived `request_ms - app_total_ms` overhead is never
   called serialization.
+- Milestone 5 hybrid responses report `rrf_ms` (fusion of the two candidate lists) alongside
+  `lexical_ms`, `model_load_ms`, `query_embedding_ms`, `vector_ms` and `total_ms`; a stage that
+  did not run is `null`, and `model_load_ms` is `null` unless the request loaded the model.
+  Per-run P50/P95/P99 are in `docs/search-hybrid-m5.md`.
 - Measured stages: `query_understanding_ms`, `jev_decision_ms`, `lexical_ms`,
   `vector_ms`, `filtering_ms`, `rrf_ms`, `reranking_ms`, `serialization_ms`,
   `total_ms`.
@@ -498,7 +524,9 @@ human review, and evaluation is human-reviewed.
    seed catalog. See `docs/data-quality.md` §2.5.
 2. **`rrf_k`:** configurable. The initial value is unspecified. Milestone 5
    selects a provisional value, marked provisional. Milestone 10 re-evaluates
-   on the human-reviewed Golden Dataset (ADR-002, section 9.1).
+   on the human-reviewed Golden Dataset (ADR-002, section 9.1). **Milestone 5:** `rrf_k = 100`,
+   provisional, chosen by the predeclared tie rule after every grid value tied; still open
+   until Milestone 10.
 3. **Embedding and reranker models:** selected in Milestones 4 and 8 from
    measurement (ADR-004). **Milestone 4:** embedding model decided in ADR-006
    (`sentence-transformers/all-MiniLM-L6-v2` at revision
