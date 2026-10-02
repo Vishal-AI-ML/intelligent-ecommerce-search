@@ -11,6 +11,7 @@ detected by a path check before anything heavy is imported. A failed load is not
 next call tries again (for example after `model-fetch`).
 """
 
+import logging
 import os
 import threading
 import time
@@ -27,6 +28,10 @@ OFFLINE_ENV = {
     "TRANSFORMERS_OFFLINE": "1",
     "HF_HUB_DISABLE_TELEMETRY": "1",
 }
+# The library logs the absolute snapshot path at INFO when it loads a model ("Loading
+# SentenceTransformer model from ..."). Its INFO output is dropped; warnings and errors are kept.
+LIBRARY_LOGGER = "sentence_transformers"
+LIBRARY_LOG_LEVEL = logging.WARNING
 
 
 class SentenceTransformerEmbedder:
@@ -66,6 +71,7 @@ class SentenceTransformerEmbedder:
         if not self.snapshot_present():
             raise EmbedderUnavailable("snapshot_missing")
         os.environ.update(OFFLINE_ENV)
+        logging.getLogger(LIBRARY_LOGGER).setLevel(LIBRARY_LOG_LEVEL)
         try:
             from sentence_transformers import SentenceTransformer
 

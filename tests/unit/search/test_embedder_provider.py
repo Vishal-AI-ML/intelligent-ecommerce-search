@@ -3,6 +3,7 @@
 No test here imports torch or sentence-transformers, downloads anything or opens a socket.
 """
 
+import logging
 import math
 import os
 import subprocess
@@ -145,6 +146,53 @@ def test_a_failed_load_is_sanitized_and_retried(tmp_path, fake_library):
     assert "cannot read" not in str(info.value) and info.value.__cause__ is None
     fake_library.fail = False
     assert embedder.load() is not None and embedder.loaded
+
+
+@pytest.fixture
+def library_logger():
+    logger = logging.getLogger(stp.LIBRARY_LOGGER)
+    level = logger.level
+    logger.setLevel(logging.NOTSET)
+    yield logger
+    logger.setLevel(level)
+
+
+def test_loading_does_not_log_the_local_snapshot_path(
+    tmp_path, fake_library, library_logger, caplog, monkeypatch
+):
+    models_dir = tmp_path / "SENTINEL_models_7f3a9c"
+    path = make_snapshot(models_dir)
+    child = logging.getLogger(f"{stp.LIBRARY_LOGGER}.base.model")
+
+    def logging_init(self, model_path, **kwargs):  # what the real library logs while loading
+        child.info(f"Loading SentenceTransformer model from {model_path}.")
+        child.warning("library warning")
+        child.error("library error")
+        original_init(self, model_path, **kwargs)
+
+    original_init = FakeSentenceTransformer.__init__
+    monkeypatch.setattr(FakeSentenceTransformer, "__init__", logging_init)
+    caplog.set_level(logging.DEBUG)
+    embedder = stp.SentenceTransformerEmbedder(spec(), models_dir)
+    assert embedder.load() is not None
+    logging.getLogger("ecommerce_search.api.dense").error(
+        "dense search unavailable: %s", "load_failed"
+    )
+
+    (model,) = fake_library.instances
+    assert Path(model.path) == path
+    messages = [(r.name, r.levelno, r.getMessage()) for r in caplog.records]
+    assert not any("Loading SentenceTransformer" in m for _, _, m in messages)
+    assert "SENTINEL_models_7f3a9c" not in caplog.text and str(path) not in caplog.text
+    assert ("sentence_transformers.base.model", logging.WARNING, "library warning") in messages
+    assert ("sentence_transformers.base.model", logging.ERROR, "library error") in messages
+    assert (
+        "ecommerce_search.api.dense",
+        logging.ERROR,
+        "dense search unavailable: load_failed",
+    ) in messages
+    assert library_logger.level == logging.WARNING
+    assert logging.getLogger("ecommerce_search").level == logging.NOTSET  # project logs untouched
 
 
 @pytest.mark.parametrize(
