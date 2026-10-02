@@ -258,7 +258,14 @@ def test_an_injected_extreme_sample_stays_in_raw_data_and_affects_summaries(tmp_
     assert run["overall"]["request_ms"]["mean"] > baseline["overall"]["request_ms"]["mean"] * 10
     assert run["per_query"]["q1"]["timed"]["request_ms"]["n"] == 7  # nothing excluded
     assert run["timed_samples"] == 21
-    assert [o["request_ms"] for o in run["flagged_outliers"]] == [98931.725]
+    # Real-clock fake-client samples may also be flagged by jitter; check the injected one only.
+    injected = [
+        o
+        for o in run["flagged_outliers"]
+        if (o["query"], o["sample_index"], o["sequence"]) == ("q1", 3, victim["sequence"])
+    ]
+    assert len(injected) == 1
+    assert injected[0]["request_ms"] == 98931.725 and "request_ms" in injected[0]["metrics"]
     assert bench.verify_artifacts(summary) == []  # the summary still recomputes from raw data
 
 
