@@ -246,11 +246,17 @@ Docker verification are in `docs/search-dense-m4.md`; the model decision is ADR-
 * **Installing torch.** `torch` comes from the official CPU-only wheel index on every platform
   (`[tool.uv.sources]` in `pyproject.toml`), so the environment is large (about 0.9 GB) but has no
   CUDA packages.
+* **Network access.** Among the application commands, only `model-fetch` needs the network: it
+  downloads the pinned model snapshot. Once the verified snapshot exists, model loading,
+  embedding generation and dense serving run locally and offline. Environment setup (`uv sync`)
+  may download the locked Python packages, and a fresh Docker image build may pull its tagged
+  base images and download the locked packages from the configured indexes. Model weights are
+  never downloaded during the image build or baked into the image.
 
 Required sequence (each step is explicit; none runs automatically):
 
 ```bash
-# once, the ONLY networked command: weights go to the git-ignored models/ directory
+# once, the only application command that needs the network: weights go to the git-ignored models/ directory
 uv run python -m ecommerce_search.search model-fetch --model-id sentence-transformers/all-MiniLM-L6-v2 --revision 1110a243fdf4706b3f48f1d95db1a4f5529b4d41
 uv run alembic upgrade head                                          # revision 0004 (schema only)
 uv run python -m ecommerce_search.catalog ingest --database <db>     # catalog + lexical documents

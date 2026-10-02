@@ -18,9 +18,13 @@
   reviewed registry entry.
 * **Weights.** Fetched explicitly, once, with `python -m ecommerce_search.search model-fetch` into
   the git-ignored repository `models/` directory (Hugging Face hub layout plus a SHA-256 file
-  manifest). It is the only command that uses the network. Every other path loads the local
-  snapshot offline (`HF_HUB_OFFLINE=1`, `trust_remote_code=False`); weights are never committed
-  and never copied into the Docker image.
+  manifest). It is the only application command that needs the network. Once the verified
+  snapshot exists, model loading, embedding generation and dense serving load it locally and
+  offline (`HF_HUB_OFFLINE=1`, `trust_remote_code=False`); weights are never committed and never
+  copied into the Docker image. Separately, environment setup (`uv sync`) may download the locked
+  Python packages, and a fresh Docker image build may pull its tagged base images and download
+  the locked packages from the configured indexes; model weights are never downloaded during the
+  image build.
 * **Embedding text.** Built by `embeddings/text.py` from a closed whitelist of validated catalog
   fields (title, brand, category/subcategory, typed specifications, description). Excluded: raw
   seller lines, seller id, price, currency, rating, review count, availability, provenance,
