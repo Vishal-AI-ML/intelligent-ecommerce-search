@@ -3,6 +3,8 @@
 Scratch databases only (`ecommerce_search_bench_<12 hex>`); the development database is refused
 by name and never connected to for data. Offline: the pinned MiniLM snapshot must verify against
 its manifest, and outbound non-loopback sockets are refused in the parent and every run process.
+Every run process repeats the parent's preflight (pinned commit and tree, protocol hashes, fixed
+settings, model manifest, scratch name) before any setup, so invoking it directly skips nothing.
 
 Frozen protocol: the 17 queries and their deterministic attribute expectations are committed in
 this file (`QUERY_PROTOCOL`), validated against the approved expectation rules and pinned by
@@ -196,6 +198,21 @@ TOP_K = 10
 SOURCE_DEPTH = 50  # search_lexical_k / search_dense_k: the hybrid source depths (I2)
 RRF_K_GRID: tuple[int, ...] = (1, 5, 10, 20, 40, 60, 100)
 TIE_RULE = "exact tie on mean consistency -> the largest tied rrf_k"
+# The approved Phase-S protocol and the effective production settings it was approved for. Any
+# other value (environment, .env or an edited constant) is refused before setup, DB or model work.
+PHASE_S_FROZEN: dict[str, object] = {
+    "top_k": 10,
+    "source_depth": 50,
+    "rrf_k_grid": [1, 5, 10, 20, 40, 60, 100],
+}
+PHASE_S_SETTINGS: dict[str, int] = {
+    "search_lexical_k": 50,
+    "search_dense_k": 50,
+    "search_candidate_k": 50,
+    "search_rrf_k": 60,  # the pre-selection candidate; never changed by this harness
+}
+PHASE_S_RRF_K_STATUS = "candidate_pending_selection"
+EXPERIMENT_ID_RE = re.compile(r"hybrid-m5-(s|cl)-\d{8}T\d{6}Z-[0-9a-f]{8}")
 ENDPOINTS: dict[str, dict] = {
     "search": {"path": "/search", "stages": ("lexical_ms",)},
     "dense": {
@@ -530,6 +547,76 @@ def check_provenance(root: Path, phase: str, git: Callable[..., bytes] = _git) -
             "runtime-affecting paths differ from the pinned commit: " + ", ".join(differing[:10])
         )
     return {"harness_head": head, "pinned_commit": commit, "guarded": list(GUARDED_PATHS)}
+
+
+def check_phase_settings(phase: str, settings, rrf_k_status: str) -> dict:
+    """Refuse unless the harness protocol and the effective runtime configuration are exactly the
+    ones the phase was approved for. Values are refused, not merely recorded."""
+    if phase != "S":
+        raise ProvenanceError(
+            f"phase {phase} has no approved runtime settings yet; pin them with its runtime commit"
+        )
+    harness = {"top_k": TOP_K, "source_depth": SOURCE_DEPTH, "rrf_k_grid": list(RRF_K_GRID)}
+    declared = {key: PREDECLARED["S"][key] for key in PHASE_S_FROZEN}
+    if harness != PHASE_S_FROZEN or declared != PHASE_S_FROZEN:
+        raise ProvenanceError("the Phase S top_k, source depth or rrf_k grid differs from approval")
+    effective = {name: getattr(settings, name, None) for name in PHASE_S_SETTINGS}
+    differing = sorted(
+        f"{name}={value!r} (approved {PHASE_S_SETTINGS[name]})"
+        for name, value in effective.items()
+        if type(value) is not int or value != PHASE_S_SETTINGS[name]
+    )
+    if differing:
+        raise ProvenanceError("Phase S requires the approved settings: " + ", ".join(differing))
+    if rrf_k_status != PHASE_S_RRF_K_STATUS:
+        raise ProvenanceError(
+            f"RRF_K_STATUS is {rrf_k_status!r}; Phase S runs only before selection "
+            f"({PHASE_S_RRF_K_STATUS!r})"
+        )
+    return {**effective, "rrf_k_status": rrf_k_status}
+
+
+def preflight(
+    phase: str,
+    settings,
+    git: Callable[..., bytes] | None = None,
+    verify: Callable[..., list[str]] | None = None,
+) -> dict:
+    """Every invariant a phase depends on, checked before any setup, database or model work.
+    Runs in the parent and again in every child, so invoking the child directly skips nothing."""
+    from ecommerce_search.search.hybrid import RRF_K_STATUS
+
+    if verify is None:
+        from ecommerce_search.embeddings.fetch import verify_manifest as verify
+    if phase not in PREDECLARED:
+        raise BenchmarkError(f"unknown phase {phase!r}")
+    provenance = check_provenance(ROOT, phase, git if git is not None else _git)
+    identity = check_protocol_identity()
+    fixed = check_phase_settings(phase, settings, RRF_K_STATUS)
+    model = check_model(settings.resolved_models_dir(), settings.embedding_spec(), verify)
+    return {"provenance": provenance, "identity": identity, "settings": fixed, "model": model}
+
+
+def check_child_args(args: argparse.Namespace) -> str:
+    """The child accepts only the exact arguments its parent passes for a predeclared run."""
+    phase = args.child_phase
+    if phase not in PREDECLARED:
+        raise BenchmarkError("child needs a known phase")
+    if not isinstance(args.run, int) or not 1 <= args.run <= PREDECLARED[phase]["runs"]:
+        raise BenchmarkError(f"child run must be 1..{PREDECLARED[phase]['runs']} for {phase}")
+    sampling = (0, 0)
+    if phase == "CL":
+        sampling = (PREDECLARED["CL"]["warmup_per_query"], PREDECLARED["CL"]["samples_per_query"])
+    if (args.warmup, args.samples) != sampling:
+        raise BenchmarkError("child sampling differs from the predeclared protocol")
+    experiment_id = args.experiment_id or ""
+    if not EXPERIMENT_ID_RE.fullmatch(experiment_id) or not experiment_id.startswith(
+        f"hybrid-m5-{phase.lower()}-"
+    ):
+        raise BenchmarkError("child experiment id is not a harness id for this phase")
+    if not args.out or ROOT.resolve() in Path(args.out).resolve().parents:
+        raise BenchmarkError("child output must be a file outside the repository")
+    return phase
 
 
 def check_output_dir(root: Path, out_dir: Path, git: Callable[..., bytes] = _git) -> Path:
@@ -1273,6 +1360,15 @@ def collect_phase_cl(client, schemas: dict, queries, run: int, emit, warmup, sam
 def child_main(args: argparse.Namespace) -> int:  # pragma: no cover - needs a database and model
     install_network_guard()
     os.environ["HF_HUB_OFFLINE"] = "1"
+    from ecommerce_search.config import get_settings
+
+    # The parent's refusals, repeated here before any setup, database or model work.
+    phase = check_child_args(args)
+    settings = get_settings()
+    checked = preflight(phase, settings)
+    name = assert_scratch_name(args.database or "", settings.postgres_db)
+    queries = checked["identity"]["queries"]
+
     from alembic import command
     from alembic.config import Config
     from fastapi.testclient import TestClient
@@ -1285,24 +1381,12 @@ def child_main(args: argparse.Namespace) -> int:  # pragma: no cover - needs a d
         HybridSearchResponse,
         SearchResponse,
     )
-    from ecommerce_search.config import get_settings
     from ecommerce_search.embeddings.sentence_transformers_provider import (
         SentenceTransformerEmbedder,
     )
     from ecommerce_search.ingestion.service import ingest_file
     from ecommerce_search.search.dense_indexing import embed, embedding_status
 
-    phase = args.child_phase
-    if phase not in PREDECLARED or not isinstance(args.run, int):
-        raise BenchmarkError("child needs a known phase and a run number")
-    if phase == "CL" and (args.warmup, args.samples) != (
-        PREDECLARED["CL"]["warmup_per_query"],
-        PREDECLARED["CL"]["samples_per_query"],
-    ):
-        raise BenchmarkError("child sampling differs from the predeclared protocol")
-    settings = get_settings()
-    name = assert_scratch_name(args.database, settings.postgres_db)
-    queries = check_protocol_identity()["queries"]
     records: list[dict] = []
     sequence = 0
 
@@ -1409,15 +1493,13 @@ def parent_main(phase: str) -> int:  # pragma: no cover - runs the benchmark
     from sqlalchemy import create_engine
 
     from ecommerce_search.config import get_settings
-    from ecommerce_search.embeddings.fetch import verify_manifest
     from ecommerce_search.embeddings.text import EMBEDDING_TEXT_VERSION
 
     install_network_guard()
-    provenance = check_provenance(ROOT, phase)
-    identity = check_protocol_identity()
-    out_dir = check_output_dir(ROOT, OUTPUT_DIR)
     settings = get_settings()
-    model = check_model(settings.resolved_models_dir(), settings.embedding_spec(), verify_manifest)
+    checked = preflight(phase, settings)
+    provenance, identity, model = checked["provenance"], checked["identity"], checked["model"]
+    out_dir = check_output_dir(ROOT, OUTPUT_DIR)
     protocol = PREDECLARED[phase]
     started = datetime.now(UTC)
     experiment_id = f"hybrid-m5-{phase.lower()}-{started.strftime('%Y%m%dT%H%M%SZ')}-"

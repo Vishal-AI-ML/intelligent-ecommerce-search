@@ -122,6 +122,57 @@ def test_exact_expectation_table_and_hash():
     assert frozenset({"noise cancelling"}) == bench.APPROVED_PHRASES
 
 
+def _reviewed(query, *expectations):
+    status = "checked" if expectations else "diagnostic_only"
+    return {
+        "query": query,
+        "status": status,
+        "expectations": [{"term": t, "field": f, "value": v} for t, f, v in expectations],
+    }
+
+
+# The complete reviewed table, written out independently of QUERY_PROTOCOL and its helpers.
+REVIEWED_TABLE = [
+    _reviewed("laptop", ("laptop", "category", "laptop")),
+    _reviewed("hp laptop", ("hp", "brand", "HP"), ("laptop", "category", "laptop")),
+    _reviewed("8gb laptop", ("laptop", "category", "laptop")),
+    _reviewed("iphone"),
+    _reviewed("zzqxv"),
+    _reviewed("coding ke liye laptop", ("laptop", "category", "laptop")),
+    _reviewed("coding laptop", ("laptop", "category", "laptop")),
+    _reviewed("student laptop", ("laptop", "category", "laptop")),
+    _reviewed("lightweight laptop", ("laptop", "category", "laptop")),
+    _reviewed("premium phone", ("phone", "category", "phone")),
+    _reviewed("running shoes", ("shoes", "category", "shoes")),
+    _reviewed(
+        "noise cancelling headphones",
+        ("noise cancelling", "anc", True),
+        ("headphones", "category", "headphones"),
+    ),
+    _reviewed("256gb ssd laptop", ("laptop", "category", "laptop")),
+    _reviewed("apple phone", ("apple", "brand", "Apple"), ("phone", "category", "phone")),
+    _reviewed("nike shoes", ("nike", "brand", "Nike"), ("shoes", "category", "shoes")),
+    _reviewed("wireless headphones", ("headphones", "category", "headphones")),
+    _reviewed("anc headphones", ("anc", "anc", True), ("headphones", "category", "headphones")),
+]
+
+
+def _canonical_sha256(obj):
+    canonical = json.dumps(obj, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
+def test_independently_reconstructed_table_recomputes_the_reviewed_hashes():
+    assert _canonical_sha256(REVIEWED_TABLE) == (
+        "ac5647876b33397bc0b0cc2d60e60357af9285daf65f5973e5c675f824c8d643"
+    )
+    assert _canonical_sha256([e["query"] for e in REVIEWED_TABLE]) == (
+        "ea1df08db89a8bceb0e5b6437f18e75a30aed997fb70d727d080b441ebbd78d3"
+    )
+    assert IDENTITY["expectation_table"] == REVIEWED_TABLE
+    assert [e["query"] for e in REVIEWED_TABLE] == list(REVIEWED_QUERIES)
+
+
 def test_identity_is_deterministic_and_says_it_is_a_proxy():
     assert bench.protocol_identity() == IDENTITY
     label = IDENTITY["proxy_label"]
@@ -1184,6 +1235,309 @@ def test_phase_cl_refuses_until_its_runtime_commit_is_pinned():
     assert calls == []
     with pytest.raises(bench.BenchmarkError, match="unknown phase"):
         bench.check_provenance(ROOT, "X", git=fake_git())
+
+
+# ---- fixed Phase-S settings and the shared preflight (fakes only) ----------------------------------
+
+APPROVED_SETTINGS = {
+    "search_lexical_k": 50,
+    "search_dense_k": 50,
+    "search_candidate_k": 50,
+    "search_rrf_k": 60,
+}
+
+
+def fake_settings(models_dir, **overrides):
+    from ecommerce_search.embeddings.spec import ALL_MINILM_L6_V2
+
+    values = {**APPROVED_SETTINGS, **overrides}
+    return SimpleNamespace(
+        **values,
+        postgres_db="ecommerce_search",
+        database_url=lambda database=None: f"unused://{database}",
+        resolved_models_dir=lambda: models_dir,
+        embedding_spec=lambda: ALL_MINILM_L6_V2,
+    )
+
+
+# The model manifest check is shared with the dense harness and raises its ProvenanceError.
+PROVENANCE_ERRORS = (bench.ProvenanceError, sys.modules["benchmark_dense"].ProvenanceError)
+
+
+class SpyVerify:
+    def __init__(self, problems=()):
+        self.problems, self.calls = list(problems), []
+
+    def __call__(self, models_dir, model_id, revision):
+        self.calls.append((models_dir, model_id, revision))
+        return self.problems
+
+
+def test_the_approved_phase_s_settings_are_pinned_to_the_production_names():
+    from ecommerce_search.config import Settings
+    from ecommerce_search.search.hybrid import RRF_K_STATUS
+
+    assert bench.PHASE_S_SETTINGS == APPROVED_SETTINGS
+    assert {n: Settings.model_fields[n].default for n in APPROVED_SETTINGS} == APPROVED_SETTINGS
+    assert bench.PHASE_S_FROZEN == {
+        "top_k": 10,
+        "source_depth": 50,
+        "rrf_k_grid": [1, 5, 10, 20, 40, 60, 100],
+    }
+    assert bench.PHASE_S_RRF_K_STATUS == "candidate_pending_selection" == RRF_K_STATUS
+
+
+def test_approved_phase_s_settings_pass(tmp_path):
+    result = bench.check_phase_settings("S", fake_settings(tmp_path), "candidate_pending_selection")
+    assert result == {**APPROVED_SETTINGS, "rrf_k_status": "candidate_pending_selection"}
+
+
+@pytest.mark.parametrize(
+    ("name", "value"),
+    [
+        ("search_lexical_k", 49),
+        ("search_lexical_k", 100),
+        ("search_dense_k", 10),
+        ("search_dense_k", 51),
+        ("search_candidate_k", 10),
+        ("search_candidate_k", 100),
+        ("search_rrf_k", 1),
+        ("search_rrf_k", 40),
+        ("search_rrf_k", 61),
+        ("search_rrf_k", "60"),
+        ("search_rrf_k", None),
+    ],
+)
+def test_every_non_approved_phase_s_setting_is_refused(tmp_path, name, value):
+    settings = fake_settings(tmp_path, **{name: value})
+    with pytest.raises(bench.ProvenanceError, match=f"approved settings: {name}="):
+        bench.check_phase_settings("S", settings, "candidate_pending_selection")
+
+
+@pytest.mark.parametrize(
+    ("variable", "value"),
+    [
+        ("SEARCH_LEXICAL_K", "60"),
+        ("SEARCH_DENSE_K", "40"),
+        ("SEARCH_CANDIDATE_K", "20"),
+        ("SEARCH_RRF_K", "20"),
+    ],
+)
+def test_non_default_environment_values_are_refused_not_recorded(monkeypatch, variable, value):
+    from ecommerce_search.config import Settings
+
+    for name in APPROVED_SETTINGS:
+        monkeypatch.delenv(name.upper(), raising=False)
+    monkeypatch.setenv("POSTGRES_PASSWORD", "unit-test-password")
+    approved = Settings(_env_file=None)
+    bench.check_phase_settings("S", approved, "candidate_pending_selection")
+    monkeypatch.setenv(variable, value)
+    changed = Settings(_env_file=None)
+    with pytest.raises(bench.ProvenanceError, match=variable.lower()):
+        bench.check_phase_settings("S", changed, "candidate_pending_selection")
+
+
+def test_a_selected_rrf_k_status_is_refused(tmp_path):
+    with pytest.raises(bench.ProvenanceError, match="only before selection"):
+        bench.check_phase_settings("S", fake_settings(tmp_path), "provisional")
+
+
+@pytest.mark.parametrize(
+    ("attribute", "value"),
+    [
+        ("TOP_K", 20),
+        ("SOURCE_DEPTH", 40),
+        ("RRF_K_GRID", (1, 5, 10, 20, 40, 60)),
+        ("RRF_K_GRID", (1, 5, 10, 20, 40, 60, 100, 200)),
+        ("PREDECLARED", {**bench.PREDECLARED, "S": {**bench.PREDECLARED["S"], "top_k": 5}}),
+        (
+            "PREDECLARED",
+            {**bench.PREDECLARED, "S": {**bench.PREDECLARED["S"], "rrf_k_grid": [60]}},
+        ),
+    ],
+)
+def test_a_changed_phase_s_protocol_constant_is_refused(tmp_path, monkeypatch, attribute, value):
+    monkeypatch.setattr(bench, attribute, value)
+    with pytest.raises(bench.ProvenanceError, match="differs from approval"):
+        bench.check_phase_settings("S", fake_settings(tmp_path), "candidate_pending_selection")
+
+
+def test_phase_cl_has_no_approved_settings_yet(tmp_path):
+    with pytest.raises(bench.ProvenanceError, match="no approved runtime settings"):
+        bench.check_phase_settings("CL", fake_settings(tmp_path), "candidate_pending_selection")
+
+
+def test_preflight_passes_only_with_every_invariant(tmp_path):
+    calls, verify = [], SpyVerify()
+    result = bench.preflight("S", fake_settings(tmp_path), git=fake_git(calls=calls), verify=verify)
+    assert result["provenance"]["pinned_commit"] == bench.CORE_COMMIT
+    assert result["identity"] == IDENTITY
+    assert result["settings"]["search_rrf_k"] == 60
+    assert result["model"]["manifest_problems"] == []
+    assert [c[0] for c in calls] == ["status", "rev-parse", "merge-base", "diff"]
+    assert len(verify.calls) == 1 and verify.calls[0][0] == tmp_path
+
+
+def test_preflight_refuses_phase_cl_before_git_settings_or_model_work(tmp_path):
+    calls, verify = [], SpyVerify()
+    with pytest.raises(bench.ProvenanceError, match="no pinned runtime commit"):
+        bench.preflight("CL", fake_settings(tmp_path), git=fake_git(calls=calls), verify=verify)
+    assert calls == [] and verify.calls == []
+
+
+@pytest.mark.parametrize(
+    ("git", "overrides", "problems", "message"),
+    [
+        (fake_git(status=b" M src/x.py\n"), {}, (), "not clean"),
+        (fake_git(ancestor=False), {}, (), "not an ancestor"),
+        (fake_git(diff=b"src/ecommerce_search/search/hybrid.py\n"), {}, (), "runtime-affecting"),
+        (fake_git(), {"search_rrf_k": 40}, (), "approved settings"),
+        (fake_git(), {}, ("sha256 mismatch",), "failed verification"),
+    ],
+)
+def test_preflight_refuses_each_failed_invariant(tmp_path, git, overrides, problems, message):
+    verify = SpyVerify(problems)
+    with pytest.raises(PROVENANCE_ERRORS, match=message):
+        bench.preflight("S", fake_settings(tmp_path, **overrides), git=git, verify=verify)
+    assert len(verify.calls) == (1 if problems else 0)  # the manifest is checked last
+
+
+def test_preflight_refuses_changed_protocol_hashes(tmp_path, monkeypatch):
+    original = bench.check_protocol_identity.__defaults__
+    monkeypatch.setattr(
+        bench.check_protocol_identity, "__defaults__", (original[0], original[1], "0" * 64)
+    )
+    verify = SpyVerify()
+    with pytest.raises(bench.ProvenanceError, match="expectation table"):
+        bench.preflight("S", fake_settings(tmp_path), git=fake_git(), verify=verify)
+    assert verify.calls == []
+
+
+# ---- direct child invocation repeats every applicable refusal (fakes only) -----------------------
+
+
+class SetupReached(Exception):
+    """Raised by a stub at the first database or model step: preflight let the child through."""
+
+
+@pytest.fixture
+def child_env(monkeypatch, tmp_path):
+    import sqlalchemy
+
+    import ecommerce_search.config as config
+    import ecommerce_search.embeddings.fetch as fetch
+    import ecommerce_search.embeddings.sentence_transformers_provider as provider
+
+    def setup_reached(*args, **kwargs):
+        raise SetupReached
+
+    env = SimpleNamespace(
+        git_calls=[], verify=SpyVerify(), guard=[], settings=fake_settings(tmp_path)
+    )
+    monkeypatch.setenv("HF_HUB_OFFLINE", "1")
+    monkeypatch.setattr(bench, "install_network_guard", lambda: env.guard.append(True))
+    monkeypatch.setattr(bench, "_git", fake_git(calls=env.git_calls))
+    monkeypatch.setattr(config, "get_settings", lambda: env.settings)
+    monkeypatch.setattr(fetch, "verify_manifest", env.verify)
+    monkeypatch.setattr(sqlalchemy, "create_engine", setup_reached)
+    monkeypatch.setattr(provider.SentenceTransformerEmbedder, "load", setup_reached)
+    return env
+
+
+def child_argv(tmp_path, phase="S", **overrides):
+    args = {
+        "--child-phase": phase,
+        "--run": "1",
+        "--database": "ecommerce_search_bench_0123456789ab",
+        "--experiment-id": f"hybrid-m5-{phase.lower()}-20261002T120000Z-0123abcd",
+        "--out": str(tmp_path / "run1.jsonl"),
+    }
+    if phase == "CL":
+        args.update({"--warmup": "20", "--samples": "200"})
+    args.update(overrides)
+    return ["--child", *(x for k, v in args.items() if v is not None for x in (k, v))]
+
+
+def test_direct_child_cl_cannot_bypass_the_runtime_commit_refusal(child_env, tmp_path):
+    with pytest.raises(bench.ProvenanceError, match="no pinned runtime commit"):
+        bench.main(child_argv(tmp_path, "CL"))
+    assert child_env.git_calls == [] and child_env.verify.calls == []
+    assert not (tmp_path / "run1.jsonl").exists()
+
+
+def test_an_approved_child_reaches_setup_only_after_every_check(child_env, tmp_path):
+    with pytest.raises(SetupReached):
+        bench.main(child_argv(tmp_path))
+    assert child_env.guard == [True]
+    assert [c[0] for c in child_env.git_calls] == ["status", "rev-parse", "merge-base", "diff"]
+    assert len(child_env.verify.calls) == 1
+
+
+@pytest.mark.parametrize(
+    ("argv", "message"),
+    [
+        ({"--run": "0"}, "child run"),
+        ({"--run": "3"}, "child run"),
+        ({"--warmup": "20", "--samples": "200"}, "sampling"),
+        ({"--child-phase": "X"}, "known phase"),
+        ({"--experiment-id": "hybrid-m5-cl-20261002T120000Z-0123abcd"}, "experiment id"),
+        ({"--experiment-id": None}, "experiment id"),
+        ({"--out": str(ROOT / "run1.jsonl")}, "outside the repository"),
+        ({"--out": None}, "outside the repository"),
+        ({"--database": "ecommerce_search"}, "development database"),
+        ({"--database": "ecommerce_search_bench_xyz"}, "scratch database names"),
+        ({"--database": None}, "scratch database names"),
+    ],
+)
+def test_direct_child_arguments_are_refused_before_setup(child_env, tmp_path, argv, message):
+    with pytest.raises(bench.BenchmarkError, match=message):
+        bench.main(child_argv(tmp_path, **argv))
+
+
+def test_direct_child_cl_sampling_must_be_predeclared(child_env, tmp_path):
+    with pytest.raises(bench.BenchmarkError, match="sampling"):
+        bench.main(child_argv(tmp_path, "CL", **{"--samples": "5"}))
+
+
+@pytest.mark.parametrize(
+    ("change", "message"),
+    [
+        ({"git": fake_git(status=b"?? scripts/new.py\n")}, "not clean"),
+        ({"git": fake_git(ancestor=False)}, "not an ancestor"),
+        ({"git": fake_git(diff=b"src/ecommerce_search/config/settings.py\n")}, "runtime-affecting"),
+        ({"settings": {"search_lexical_k": 49}}, "search_lexical_k"),
+        ({"settings": {"search_dense_k": 49}}, "search_dense_k"),
+        ({"settings": {"search_candidate_k": 49}}, "search_candidate_k"),
+        ({"settings": {"search_rrf_k": 40}}, "search_rrf_k"),
+        ({"status": "provisional"}, "only before selection"),
+        ({"problems": ["sha256 mismatch"]}, "failed verification"),
+        ({"table_sha": "0" * 64}, "expectation table"),
+        ({"query_sha": "0" * 64}, "QUERY_SET_SHA256"),
+    ],
+)
+def test_direct_child_s_cannot_bypass_provenance_protocol_settings_or_model_checks(
+    child_env, tmp_path, monkeypatch, change, message
+):
+    import ecommerce_search.search.hybrid as hybrid
+
+    if "git" in change:
+        monkeypatch.setattr(bench, "_git", change["git"])
+    if "settings" in change:
+        child_env.settings = fake_settings(tmp_path, **change["settings"])
+    if "status" in change:
+        monkeypatch.setattr(hybrid, "RRF_K_STATUS", change["status"])
+    if "problems" in change:
+        child_env.verify.problems = change["problems"]
+    if "table_sha" in change or "query_sha" in change:
+        protocol, query_sha, table_sha = bench.check_protocol_identity.__defaults__
+        monkeypatch.setattr(
+            bench.check_protocol_identity,
+            "__defaults__",
+            (protocol, change.get("query_sha", query_sha), change.get("table_sha", table_sha)),
+        )
+    with pytest.raises(PROVENANCE_ERRORS, match=message):
+        bench.main(child_argv(tmp_path))
+    assert not (tmp_path / "run1.jsonl").exists()
 
 
 def test_output_directory_must_be_ignored_untracked_and_under_data_processed():
