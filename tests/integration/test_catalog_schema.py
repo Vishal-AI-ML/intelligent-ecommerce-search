@@ -129,7 +129,8 @@ def test_only_constraint_backing_indexes_exist_plus_the_m3_gin_index(migrated_en
     definitions = dict(rows)
     assert re.search(r"USING gin \(search_vector\)", definitions[gin_name])
     assert all(re.search(r"USING btree", d) for n, d in rows if n != gin_name)
-    assert columns == {"product_search_documents.search_vector"}  # no vector/JSON column anywhere
+    # M4 intentionally adds exactly one pgvector column (and no vector index); no JSON anywhere.
+    assert columns == {"product_search_documents.search_vector", "product_embeddings.embedding"}
 
 
 def test_database_check_values_equal_application_taxonomies(migrated_engine):
@@ -436,7 +437,7 @@ def test_model_and_migration_constraint_definitions_are_identical(settings):
     config = Config("alembic.ini")
     config.attributes["database"] = "offline_sql_only"  # offline mode never connects
     config.output_buffer = io.StringIO()
-    command.upgrade(config, "0001:0003", sql=True)  # M3: the model now includes 0003
+    command.upgrade(config, "0001:0004", sql=True)  # M4: the model now includes 0004
     migration = _constraint_definitions(config.output_buffer.getvalue())
 
     model = {}

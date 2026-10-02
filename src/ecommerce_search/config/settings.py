@@ -1,9 +1,17 @@
 from functools import lru_cache
+from pathlib import Path
 from typing import Literal
 
 from pydantic import Field, SecretStr, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from sqlalchemy.engine import URL
+
+from ecommerce_search.embeddings.spec import (
+    ALL_MINILM_L6_V2,
+    EMBEDDING_MODELS,
+    EmbeddingModelSpec,
+    repository_models_dir,
+)
 
 
 class Settings(BaseSettings):
@@ -36,11 +44,39 @@ class Settings(BaseSettings):
     search_default_top_k: int = Field(default=10, ge=1, le=1000)
     search_max_query_length: int = Field(default=200, ge=1, le=1000)
 
+    # Dense search (Milestone 4). `search_dense_k` is the maximum accepted dense `top_k`.
+    search_dense_k: int = Field(default=50, ge=1, le=1000)
+    # The model must be an entry of the production registry (ADR-006) at its pinned revision:
+    # settings select a reviewed model, they never introduce an unreviewed one.
+    embedding_model_id: str = ALL_MINILM_L6_V2.model_id
+    embedding_model_revision: str = ALL_MINILM_L6_V2.revision
+    # None = the git-ignored `models/` directory at the repository root (source checkout).
+    # The api container sets this to its read-only mount.
+    embedding_models_dir: Path | None = None
+    embedding_batch_size: int = Field(default=32, ge=1, le=256)
+
     @model_validator(mode="after")
     def _default_top_k_within_limit(self) -> "Settings":
         if self.search_default_top_k > self.search_lexical_k:
             raise ValueError("search_default_top_k must not exceed search_lexical_k")
+        if self.search_default_top_k > self.search_dense_k:
+            raise ValueError("search_default_top_k must not exceed search_dense_k")
         return self
+
+    @model_validator(mode="after")
+    def _embedding_model_is_registered(self) -> "Settings":
+        spec = EMBEDDING_MODELS.get(self.embedding_model_id)
+        if spec is None:
+            raise ValueError("embedding_model_id is not in the reviewed model registry")
+        if spec.revision != self.embedding_model_revision:
+            raise ValueError("embedding_model_revision does not match the registry pin")
+        return self
+
+    def embedding_spec(self) -> EmbeddingModelSpec:
+        return EMBEDDING_MODELS[self.embedding_model_id]
+
+    def resolved_models_dir(self) -> Path | None:
+        return self.embedding_models_dir or repository_models_dir()
 
     def database_url(self, database: str | None = None) -> URL:
         """SQLAlchemy URL for the configured server (optionally another database)."""

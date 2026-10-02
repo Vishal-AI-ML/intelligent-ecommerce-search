@@ -17,6 +17,11 @@ ENV_KEYS = [
     "SEARCH_LEXICAL_K",
     "SEARCH_DEFAULT_TOP_K",
     "SEARCH_MAX_QUERY_LENGTH",
+    "SEARCH_DENSE_K",
+    "EMBEDDING_MODEL_ID",
+    "EMBEDDING_MODEL_REVISION",
+    "EMBEDDING_MODELS_DIR",
+    "EMBEDDING_BATCH_SIZE",
 ]
 
 
@@ -123,3 +128,50 @@ def test_search_settings_read_from_environment(monkeypatch):
     monkeypatch.setenv("SEARCH_MAX_QUERY_LENGTH", "80")
     s = Settings(_env_file=None)
     assert (s.search_lexical_k, s.search_default_top_k, s.search_max_query_length) == (20, 5, 80)
+
+
+# ---- Milestone 4: dense search and embedding settings ---------------------------------------------
+
+
+def test_dense_and_embedding_defaults_pin_the_reviewed_model(make_settings):
+    s = make_settings()
+    assert s.search_dense_k == 50 and s.embedding_batch_size == 32
+    assert s.embedding_model_id == "sentence-transformers/all-MiniLM-L6-v2"
+    assert s.embedding_model_revision == "1110a243fdf4706b3f48f1d95db1a4f5529b4d41"
+    assert s.embedding_spec().dimension == 384
+    assert s.embedding_models_dir is None
+
+
+@pytest.mark.parametrize(
+    "overrides",
+    [
+        {"embedding_model_id": "BAAI/bge-small-en-v1.5"},  # not in the production registry
+        {"embedding_model_id": "org/unreviewed"},
+        {"embedding_model_revision": "main"},
+        {"embedding_model_revision": "f" * 40},
+        {"search_dense_k": 0},
+        {"search_dense_k": 5, "search_default_top_k": 6},
+        {"embedding_batch_size": 0},
+        {"embedding_batch_size": 257},
+    ],
+)
+def test_invalid_embedding_settings_rejected(make_settings, overrides):
+    with pytest.raises(ValidationError):
+        make_settings(**overrides)
+
+
+def test_models_dir_defaults_to_the_repository_root_and_can_be_overridden(make_settings, tmp_path):
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parents[2]
+    assert make_settings().resolved_models_dir() == root / "models"
+    assert make_settings(embedding_models_dir=tmp_path).resolved_models_dir() == tmp_path
+
+
+def test_dense_settings_read_from_environment(monkeypatch, tmp_path):
+    monkeypatch.setenv("POSTGRES_PASSWORD", "pw")
+    monkeypatch.setenv("SEARCH_DENSE_K", "20")
+    monkeypatch.setenv("EMBEDDING_MODELS_DIR", str(tmp_path))
+    monkeypatch.setenv("EMBEDDING_BATCH_SIZE", "8")
+    s = Settings(_env_file=None)
+    assert (s.search_dense_k, s.embedding_models_dir, s.embedding_batch_size) == (20, tmp_path, 8)

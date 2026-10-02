@@ -32,6 +32,8 @@ class QualityReport:
     # Database audits record the search-index configuration and counts they audited. File
     # reports have no stored search index, so the section states that it is not applicable.
     search_index: Mapping | None = None
+    # Database audits also record the dense (embedding) index they audited (Milestone 4).
+    dense_index: Mapping | None = None
 
     @property
     def error_count(self) -> int:
@@ -69,10 +71,18 @@ class QualityReport:
             "search_index": dict(self.search_index)
             if self.search_index is not None
             else {"applicable": False, "reason": SEARCH_INDEX_FILE_REASON},
+            "dense_index": dict(self.dense_index)
+            if self.dense_index is not None
+            else {"applicable": False, "reason": DENSE_INDEX_FILE_REASON},
             "parameters": qp.parameters_as_dict(),
             "findings": [f.to_dict() for f in self.findings],
         }
 
+
+DENSE_INDEX_FILE_REASON = (
+    "Not applicable for file reports: no stored embeddings exist; product embeddings are "
+    "audited by database audits only."
+)
 
 SEARCH_INDEX_FILE_REASON = (
     "Not applicable for file reports: no stored search index exists; search documents are "
@@ -114,6 +124,7 @@ def build_report(
     dataset_synthetic: Mapping[str, bool],
     external: Mapping[str, CheckOutcome],
     search_index: Mapping | None = None,
+    dense_index: Mapping | None = None,
 ) -> QualityReport:
     empty = (
         Finding(
@@ -151,6 +162,7 @@ def build_report(
         findings=tuple(sorted(findings, key=Finding.sort_key)),
         statistics=_statistics(records),
         search_index=search_index,
+        dense_index=dense_index,
     )
 
 
@@ -191,6 +203,9 @@ def to_markdown(report: QualityReport, generated_at: str | None = None) -> str:
         lines += ["", "Notes:", ""] + [f"- `{c['name']}`: {c['note']}" for c in notes]
     lines += ["", "## Search index", ""]
     for key, value in d["search_index"].items():
+        lines.append(f"- {key}: {value}")
+    lines += ["", "## Dense index", ""]
+    for key, value in d["dense_index"].items():
         lines.append(f"- {key}: {value}")
     lines += ["", "## Statistics", "", "```json", json.dumps(d["statistics"], indent=2), "```"]
     lines += [

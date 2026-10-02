@@ -23,6 +23,8 @@ from ecommerce_search.models.catalog import (
 )
 from ecommerce_search.search.audit import CHECK_NAME as SEARCH_CHECK_NAME
 from ecommerce_search.search.audit import audit_search_index
+from ecommerce_search.search.dense_audit import CHECK_NAME as DENSE_CHECK_NAME
+from ecommerce_search.search.dense_audit import audit_dense_index
 
 
 def audit_database(session: Session) -> QualityReport:
@@ -96,6 +98,7 @@ def audit_database(session: Session) -> QualityReport:
             )
 
     search_audit = audit_search_index(session)
+    dense_audit = audit_dense_index(session)
     n = len(products)
     latest = (
         max(datasets.values(), key=lambda d: (int(d.dataset_version), d.id)) if datasets else None
@@ -121,6 +124,7 @@ def audit_database(session: Session) -> QualityReport:
         "spec_linkage": CheckOutcome(n, tuple(linkage_findings)),
         "raw_normalized_consistency": CheckOutcome(n, tuple(consistency_findings)),
         SEARCH_CHECK_NAME: search_audit.outcome,
+        DENSE_CHECK_NAME: dense_audit.outcome,
     }
     return build_report(
         source="database",
@@ -130,4 +134,5 @@ def audit_database(session: Session) -> QualityReport:
         dataset_synthetic=synthetic,
         external=external,
         search_index=search_audit.metadata,
+        dense_index=dense_audit.metadata,
     )

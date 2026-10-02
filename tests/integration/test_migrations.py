@@ -84,9 +84,10 @@ def test_revision_0002_creates_the_m2_catalog_tables_and_no_search_table(
     assert _public_tables(settings, scratch_database) == sorted(M2_TABLES)
 
 
-def test_head_adds_only_the_m3_search_documents_table(settings, scratch_database, migrator):
-    # M3 intentionally supersedes the M2 expectation that head has no search table.
+def test_head_adds_only_the_m3_and_m4_derived_tables(settings, scratch_database, migrator):
+    # M3 intentionally superseded the M2 expectation that head has no search table; M4 likewise
+    # adds exactly one derived table, the dense embedding index.
     migrator.upgrade(scratch_database)
     assert _public_tables(settings, scratch_database) == sorted(
-        [*M2_TABLES, "product_search_documents"]
+        [*M2_TABLES, "product_search_documents", "product_embeddings"]
     )

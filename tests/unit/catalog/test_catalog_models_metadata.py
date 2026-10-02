@@ -22,20 +22,26 @@ EXPECTED_TABLES = {
     "catalog_reviews",
     # Milestone 3 adds exactly one derived table: the lexical search index.
     "product_search_documents",
+    # Milestone 4 adds exactly one derived table: the dense embedding index.
+    "product_embeddings",
 }
 SEARCH_TABLE = "product_search_documents"
+EMBEDDING_TABLE = "product_embeddings"
 
 
 def test_metadata_has_exactly_the_m2_and_m3_tables_and_search_columns_only_in_the_index_table():
     # M3 intentionally supersedes the M2 "no search columns" rule: the single allowed place for a
-    # tsvector is product_search_documents.search_vector. No vector/JSON column exists anywhere.
+    # tsvector is product_search_documents.search_vector. M4 likewise allows exactly one pgvector
+    # column, product_embeddings.embedding. No JSON column exists anywhere.
     assert set(Base.metadata.tables) == EXPECTED_TABLES
     for table in Base.metadata.tables.values():
         for column in table.columns:
             kind = type(column.type).__name__
-            assert kind not in {"Vector", "JSONB", "JSON"}, column
+            assert kind not in {"JSONB", "JSON"}, column
             if kind == "TSVECTOR":
                 assert (table.name, column.name) == (SEARCH_TABLE, "search_vector")
+            if kind in {"VECTOR", "Vector", "HALFVEC", "SPARSEVEC", "BIT"}:
+                assert (table.name, column.name) == (EMBEDDING_TABLE, "embedding")
 
 
 def test_constraint_names_follow_convention_and_fit_postgres_limit():
@@ -49,7 +55,8 @@ def test_constraint_names_follow_convention_and_fit_postgres_limit():
 
 
 def test_no_indexes_beyond_constraint_backing_ones_except_the_m3_gin_index():
-    # M3 intentionally adds one search index; every other table still has none.
+    # M3 intentionally adds one search index; every other table still has none. M4 adds no
+    # vector index (exact scan at 240 rows, ADR-006).
     for table in Base.metadata.tables.values():
         if table.name != SEARCH_TABLE:
             assert not table.indexes, f"{table.name} defines a non-constraint index"

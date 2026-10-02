@@ -29,9 +29,11 @@ class CheckSpec:
     severity: Severity
     description: str
     # "record": computed by run_checks from records; "external": supplied by a loader;
-    # "static": never applicable in this milestone.
+    # "static": not applicable unless a database audit supplies an outcome.
     kind: str
     fn: Callable[["Context"], CheckOutcome] | None = None
+    # Note used when a "static" check is not applicable (file reports).
+    not_applicable_note: str | None = None
 
 
 @dataclass(frozen=True)
@@ -514,6 +516,12 @@ def duplicate_share(ctx: Context) -> CheckOutcome:
     )
 
 
+NOT_APPLICABLE_DENSE_NOTE = (
+    "Not applicable for file reports: product embeddings are derived rows that exist only in a "
+    "database (Milestone 4). Database audits evaluate them: missing or stale rows are warnings; "
+    "malformed, tampered or invalid rows are errors."
+)
+
 NOT_APPLICABLE_LEAKAGE_NOTE = (
     "Not applicable for file reports: search documents are derived rows that exist only in a "
     "database. Database audits evaluate them (missing, stale, source-hash mismatch, rebuilt-vector "
@@ -656,6 +664,13 @@ CHECKS: tuple[CheckSpec, ...] = (
         "Embedding/search text contains no evaluation labels",
         "static",
     ),
+    CheckSpec(
+        "dense_embedding_consistency",
+        E,
+        "Product embeddings are current, well-formed and built from the whitelisted embedding text",
+        "static",
+        not_applicable_note=NOT_APPLICABLE_DENSE_NOTE,
+    ),
 )
 
 
@@ -672,9 +687,8 @@ def run_checks(
             outcomes[spec.name] = spec.fn(ctx)
         elif spec.kind == "static":
             # Not applicable unless a database audit supplies a real outcome.
-            outcomes[spec.name] = external.get(
-                spec.name, CheckOutcome(0, (), NOT_APPLICABLE_LEAKAGE_NOTE)
-            )
+            note = spec.not_applicable_note or NOT_APPLICABLE_LEAKAGE_NOTE
+            outcomes[spec.name] = external.get(spec.name, CheckOutcome(0, (), note))
         else:
             outcomes[spec.name] = external.get(
                 spec.name, CheckOutcome(0, (), "not computed for this source")

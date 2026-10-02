@@ -210,10 +210,37 @@ declared in the pinned model cards, with no separate LICENSE file at the pinned 
 - **Neutral:** all candidates are 384-dimensional, so a later switch to bge or e5 would keep
   `VECTOR(384)`, but still requires a new ADR and re-embedding.
 
+## Confirmation run from the committed tree
+
+The selection experiment above ran from an uncommitted working tree. It was rerun once,
+unchanged, from the reviewed Phase A commit, and **independently reconfirmed MiniLM**.
+
+- **Experiment ID:** `embed-select-20261001T115704Z-d4c414ad`.
+- **Source:** base commit `2ddfedc9786c8368443af343ca8aa76795fba330`, **working tree clean**,
+  no untracked source files. Source tree SHA-256
+  `231f8bbc3eaf61fbaa5389bbf3638372dcc8ab9912ea65f7fcec3e4b15c23e34`.
+- **Same protocol:** 21,609 raw samples. `--verify` reported `OK`.
+- **Gates:** all three models passed every gate again, with zero truncation and re-encode cosine
+  1.0 (rounded to 8 decimals).
+- **Rule outcome:** recomputed independently from the raw samples. Per-run warm query-encode p50
+  for MiniLM was 8.088 / 8.317 / 10.663 ms (median 8.317). For e5, the runner-up, it was 16.038 /
+  18.684 / 16.176 ms (median 16.176), and for bge 17.736 / 18.084 / 21.006 ms (median 18.084).
+  The gap of 7.859 ms exceeds the larger run-to-run spread of 2.645 ms (2.646 in the artifact,
+  which rounds per-run values first), so **MiniLM wins on the
+  first criterion again**.
+- **Probes:** the top-10 product IDs for all 12 probe queries were identical to the first run
+  for every model.
+- **Run 3:** the third run was slower for every model (for example MiniLM corpus throughput of
+  33–47 documents/s against about 70 in runs 1–2). The cause was not investigated. It widened
+  the spreads but did not change the outcome.
+
+These figures are taken from the recorded artifact. They do not replace the first experiment's
+measurements above, which remain the selection evidence.
+
 ## Follow-up
 
-1. Rerun the selection experiment once from the reviewed, committed tree. Preserve and verify the
-   artifact, and confirm MiniLM is still the rule-selected winner before migration 0004.
+1. Done: the selection experiment was rerun from the committed tree and confirmed MiniLM (see
+   above).
 2. Revisit at Milestone 10, when Golden Dataset evaluation is available, or if the catalog
    outgrows the 256-token limit.
 

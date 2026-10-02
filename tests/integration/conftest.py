@@ -83,3 +83,29 @@ def seeded_engine(settings):
         with admin.connect() as conn:
             conn.execute(text(f'DROP DATABASE IF EXISTS "{name}" WITH (FORCE)'))
         admin.dispose()
+
+
+@pytest.fixture(scope="module")
+def writable_seeded_engine(settings):
+    """Like `seeded_engine`, but owned by one test module, which may change it (Milestone 4)."""
+    from catalog_support import PROVENANCE, SEED
+
+    from ecommerce_search.ingestion.service import ingest_file
+
+    name = f"ecommerce_search_test_{uuid.uuid4().hex[:12]}"
+    admin = create_engine(settings.database_url(database="postgres"), isolation_level="AUTOCOMMIT")
+    with admin.connect() as conn:
+        conn.execute(text(f'CREATE DATABASE "{name}"'))
+    engine = None
+    try:
+        Migrator(Config("alembic.ini")).upgrade(name)
+        engine = create_engine(settings.database_url(database=name))
+        outcome = ingest_file(engine, SEED, PROVENANCE)
+        assert outcome.result is not None and outcome.result.inserted == 240
+        yield engine
+    finally:
+        if engine is not None:
+            engine.dispose()
+        with admin.connect() as conn:
+            conn.execute(text(f'DROP DATABASE IF EXISTS "{name}" WITH (FORCE)'))
+        admin.dispose()

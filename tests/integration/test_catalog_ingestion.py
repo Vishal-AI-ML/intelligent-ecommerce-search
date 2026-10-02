@@ -487,11 +487,13 @@ def flawed_lines(raw_record):
 
 
 # Database-audit-only checks: the file side cannot evaluate them. M3 adds the search-index check
-# (check 10) to this group; it is covered by tests/integration/test_search_indexing.py.
+# (check 10) to this group; it is covered by tests/integration/test_search_indexing.py. M4 adds
+# the dense-embedding check (covered by tests/integration/test_dense_audit.py).
 DATABASE_ONLY_CHECKS = (
     "spec_linkage",
     "raw_normalized_consistency",
     "embedding_search_text_leakage",
+    "dense_embedding_consistency",
 )
 
 

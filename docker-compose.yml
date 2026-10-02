@@ -50,6 +50,13 @@ services:
       SEARCH_LEXICAL_K: ${SEARCH_LEXICAL_K:-50}
       SEARCH_DEFAULT_TOP_K: ${SEARCH_DEFAULT_TOP_K:-10}
       SEARCH_MAX_QUERY_LENGTH: ${SEARCH_MAX_QUERY_LENGTH:-200}
+      # Milestone 4 dense search: the pinned model is read from the read-only mount below.
+      # Weights are never copied into the image; without a fetched snapshot, /search/dense
+      # returns a fixed 503 while /search and /health keep working.
+      SEARCH_DENSE_K: ${SEARCH_DENSE_K:-50}
+      EMBEDDING_MODELS_DIR: /models
+    volumes:
+      - ./models:/models:ro
     ports:
       - "127.0.0.1:8000:8000"
     depends_on:

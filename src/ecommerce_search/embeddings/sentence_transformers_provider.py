@@ -36,6 +36,9 @@ class SentenceTransformerEmbedder:
         self._batch_size = batch_size
         self._model: Any = None
         self._lock = threading.Lock()
+        # Inference is serialized: Hugging Face fast tokenizers are not safe for concurrent use
+        # from several threads, and the API serves requests from a thread pool.
+        self._infer_lock = threading.Lock()
 
     @property
     def spec(self) -> EmbeddingModelSpec:
@@ -83,13 +86,14 @@ class SentenceTransformerEmbedder:
     def _encode(self, texts: list[str]) -> list[list[float]]:
         self.load()
         try:
-            array = self._model.encode(
-                texts,
-                batch_size=self._batch_size,
-                normalize_embeddings=self._spec.normalize,
-                convert_to_numpy=True,
-                show_progress_bar=False,
-            )
+            with self._infer_lock:
+                array = self._model.encode(
+                    texts,
+                    batch_size=self._batch_size,
+                    normalize_embeddings=self._spec.normalize,
+                    convert_to_numpy=True,
+                    show_progress_bar=False,
+                )
             vectors = array.tolist()
         except Exception:
             raise EmbedderUnavailable("encode_failed") from None
@@ -113,9 +117,10 @@ class SentenceTransformerEmbedder:
         self.load()
         prefix = self._spec.document_prefix if kind == "document" else self._spec.query_prefix
         try:
-            encoded = self._model.tokenizer(
-                [prefix + t for t in texts], add_special_tokens=True, truncation=False
-            )
+            with self._infer_lock:
+                encoded = self._model.tokenizer(
+                    [prefix + t for t in texts], add_special_tokens=True, truncation=False
+                )
         except Exception:
             raise EmbedderUnavailable("encode_failed") from None
         return [len(ids) for ids in encoded["input_ids"]]

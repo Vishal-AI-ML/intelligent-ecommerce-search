@@ -64,11 +64,11 @@ def test_round_trip_0002_0003_0002_head_and_head_is_a_no_op(settings, scratch_da
                 ).scalar_one()
                 == 1
             )
-        migrator.upgrade(scratch_database)
-        assert TABLE in tables(engine) and revision(engine) == "0003"
+        migrator.upgrade(scratch_database)  # M4: head is now 0004 (adds product_embeddings)
+        assert TABLE in tables(engine) and revision(engine) == "0004"
         before = tables(engine)
         migrator.upgrade(scratch_database)  # head again: no-op
-        assert tables(engine) == before and revision(engine) == "0003"
+        assert tables(engine) == before and revision(engine) == "0004"
     finally:
         engine.dispose()
 
@@ -106,7 +106,11 @@ def test_schema_constraints_and_gin_index_definition(migrated_engine):
         )
         udt = set(
             conn.execute(
-                text("SELECT udt_name FROM information_schema.columns WHERE table_schema='public'")
+                text(
+                    "SELECT udt_name FROM information_schema.columns "
+                    "WHERE table_schema='public' AND table_name = :t"
+                ),
+                {"t": TABLE},
             ).scalars()
         )
     assert constraints == EXPECTED_CONSTRAINTS
@@ -123,7 +127,8 @@ def test_schema_constraints_and_gin_index_definition(migrated_engine):
         "search_vector": "tsvector",
         "built_at": "timestamp with time zone",
     }
-    assert "vector" not in udt  # no pgvector column anywhere
+    # No pgvector column in the lexical table. (M4 adds one only in product_embeddings.)
+    assert "vector" not in udt
     assert all(len(name) <= 63 for name in constraints | indexes)
 
 

@@ -7,6 +7,7 @@ import math
 import os
 import subprocess
 import sys
+import textwrap
 import threading
 import types
 from pathlib import Path
@@ -212,14 +213,23 @@ def test_validate_vectors_checks_count_dimension_and_norm():
 
 
 def test_importing_the_application_does_not_import_torch():
-    code = (
-        "import sys\n"
-        "import ecommerce_search.embeddings.sentence_transformers_provider\n"
-        "import ecommerce_search.embeddings.fetch\n"
-        "import ecommerce_search.search.cli\n"
-        "from ecommerce_search.api.app import create_app\n"
-        "heavy = {'torch', 'sentence_transformers', 'transformers', 'huggingface_hub'}\n"
-        "print(sorted(heavy & set(sys.modules)))\n"
+    # Ingestion, the CLIs, the dense indexing/audit modules and app startup never load the model.
+    code = textwrap.dedent(
+        """
+        import sys
+        import ecommerce_search.embeddings.sentence_transformers_provider
+        import ecommerce_search.embeddings.fetch
+        import ecommerce_search.search.cli
+        import ecommerce_search.catalog.cli
+        import ecommerce_search.ingestion.service
+        import ecommerce_search.search.dense_indexing
+        import ecommerce_search.search.dense_audit
+        from ecommerce_search.api.app import create_app
+        from ecommerce_search.config import Settings
+        create_app(Settings(_env_file=None, postgres_password="x"))
+        heavy = {"torch", "sentence_transformers", "transformers", "huggingface_hub", "hf_xet"}
+        print(sorted(heavy & set(sys.modules)))
+        """
     )
     done = subprocess.run(  # noqa: S603 - fixed argv
         [sys.executable, "-c", code], cwd=ROOT, capture_output=True, text=True, check=True
