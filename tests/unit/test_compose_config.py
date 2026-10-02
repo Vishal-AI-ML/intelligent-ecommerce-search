@@ -17,6 +17,9 @@ FORWARDED = {
     "SEARCH_MAX_QUERY_LENGTH": "search_max_query_length",
     # Milestone 4: dense search (api only).
     "SEARCH_DENSE_K": "search_dense_k",
+    # Milestone 5: hybrid search (api only).
+    "SEARCH_CANDIDATE_K": "search_candidate_k",
+    "SEARCH_RRF_K": "search_rrf_k",
 }
 
 
@@ -64,3 +67,13 @@ def test_model_weights_are_never_copied_into_the_image():
     }
     assert "models" not in root_files["Dockerfile"]
     assert "models/" in root_files[".dockerignore"].splitlines()
+
+
+def test_hybrid_settings_reach_only_the_api_service():
+    db = _service("db", "  migrate:")
+    migrate = _service("migrate", "  api:")
+    api = re.split(r"^volumes:", COMPOSE.split("  api:")[1], flags=re.MULTILINE)[0]
+    for name in ("SEARCH_CANDIDATE_K", "SEARCH_RRF_K"):
+        assert name not in db and name not in migrate
+        assert name in api
+    assert "x-app-env" not in api and "SEARCH_" not in COMPOSE.split("services:")[0]

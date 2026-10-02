@@ -25,6 +25,7 @@ from ecommerce_search.api.schemas import (
 )
 from ecommerce_search.config import Settings
 from ecommerce_search.embeddings.provider import Embedder, EmbedderUnavailable
+from ecommerce_search.embeddings.spec import EmbeddingModelSpec
 from ecommerce_search.embeddings.text import EMBEDDING_TEXT_VERSION
 from ecommerce_search.search.dense import DENSE_SEARCH_VERSION, DISTANCE_METRIC, dense_search
 from ecommerce_search.search.query import QueryError, normalize_query
@@ -79,6 +80,26 @@ def has_searchable_text(query: str) -> bool:
     return any(unicodedata.category(char)[0] in "LN" for char in query)
 
 
+def encode_query(
+    embedder: Embedder,
+    spec: EmbeddingModelSpec,
+    query: str,
+    query_location: tuple[str, str],
+) -> tuple[list[float], float | None, float]:
+    """Load the model, check the query token limit and encode: `(vector, load_ms, embed_ms)`.
+
+    Raises a 422 validation error for a query over the token limit and lets
+    `EmbedderUnavailable` propagate. Touches no database session (shared with /search/hybrid)."""
+    load_ms = embedder.load()
+    embed_started = time.perf_counter()
+    (tokens,) = embedder.count_tokens([query], "query")
+    if tokens > spec.max_seq_length:
+        raise _invalid(query_location, "query is too long for the embedding model")
+    vector = embedder.embed_query(query)
+    embed_ms = round((time.perf_counter() - embed_started) * 1000, 3)
+    return vector, load_ms, embed_ms
+
+
 def _dense_search(
     session: Session,
     settings: Settings,
@@ -103,13 +124,7 @@ def _dense_search(
         if embedder is None:
             raise _unavailable("snapshot_missing")
         try:
-            load_ms = embedder.load()
-            embed_started = time.perf_counter()
-            (tokens,) = embedder.count_tokens([query], "query")
-            if tokens > spec.max_seq_length:
-                raise _invalid(query_location, "query is too long for the embedding model")
-            vector = embedder.embed_query(query)
-            embed_ms = round((time.perf_counter() - embed_started) * 1000, 3)
+            vector, load_ms, embed_ms = encode_query(embedder, spec, query, query_location)
         except EmbedderUnavailable as exc:
             raise _unavailable(exc.reason) from None
         try:

@@ -54,6 +54,9 @@ services:
       # Weights are never copied into the image; without a fetched snapshot, /search/dense
       # returns a fixed 503 while /search and /health keep working.
       SEARCH_DENSE_K: ${SEARCH_DENSE_K:-50}
+      # Milestone 5 hybrid search (lexical + dense + RRF).
+      SEARCH_CANDIDATE_K: ${SEARCH_CANDIDATE_K:-50}
+      SEARCH_RRF_K: ${SEARCH_RRF_K:-60}
       EMBEDDING_MODELS_DIR: /models
     volumes:
       - ./models:/models:ro

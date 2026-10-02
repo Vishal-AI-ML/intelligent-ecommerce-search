@@ -55,12 +55,27 @@ class Settings(BaseSettings):
     embedding_models_dir: Path | None = None
     embedding_batch_size: int = Field(default=32, ge=1, le=256)
 
+    # Hybrid search (Milestone 5). Source depths are `search_lexical_k` and `search_dense_k`;
+    # `search_candidate_k` is the fused list length and the maximum accepted hybrid `top_k`.
+    search_candidate_k: int = Field(default=50, ge=1, le=2000)
+    # Reciprocal Rank Fusion constant. 60 is a candidate pending the M5 provisional selection
+    # (see `RRF_K_STATUS` in `search/hybrid.py`); it is not an evidence-backed value.
+    search_rrf_k: int = Field(default=60, ge=1, le=1000)
+
     @model_validator(mode="after")
     def _default_top_k_within_limit(self) -> "Settings":
         if self.search_default_top_k > self.search_lexical_k:
             raise ValueError("search_default_top_k must not exceed search_lexical_k")
         if self.search_default_top_k > self.search_dense_k:
             raise ValueError("search_default_top_k must not exceed search_dense_k")
+        if self.search_default_top_k > self.search_candidate_k:
+            raise ValueError("search_default_top_k must not exceed search_candidate_k")
+        return self
+
+    @model_validator(mode="after")
+    def _candidate_k_within_source_depths(self) -> "Settings":
+        if self.search_candidate_k > self.search_lexical_k + self.search_dense_k:
+            raise ValueError("search_candidate_k must not exceed search_lexical_k + search_dense_k")
         return self
 
     @model_validator(mode="after")

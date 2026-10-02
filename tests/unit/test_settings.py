@@ -18,6 +18,8 @@ ENV_KEYS = [
     "SEARCH_DEFAULT_TOP_K",
     "SEARCH_MAX_QUERY_LENGTH",
     "SEARCH_DENSE_K",
+    "SEARCH_CANDIDATE_K",
+    "SEARCH_RRF_K",
     "EMBEDDING_MODEL_ID",
     "EMBEDDING_MODEL_REVISION",
     "EMBEDDING_MODELS_DIR",
@@ -175,3 +177,44 @@ def test_dense_settings_read_from_environment(monkeypatch, tmp_path):
     monkeypatch.setenv("EMBEDDING_BATCH_SIZE", "8")
     s = Settings(_env_file=None)
     assert (s.search_dense_k, s.embedding_models_dir, s.embedding_batch_size) == (20, tmp_path, 8)
+
+
+# ---- Milestone 5: hybrid search settings ----------------------------------------------------------
+
+
+def test_hybrid_defaults(make_settings):
+    s = make_settings()
+    assert (s.search_lexical_k, s.search_dense_k, s.search_candidate_k) == (50, 50, 50)
+    assert s.search_rrf_k == 60
+
+
+@pytest.mark.parametrize(
+    "overrides",
+    [
+        {"search_candidate_k": 0},
+        {"search_candidate_k": 2001},
+        {"search_rrf_k": 0},
+        {"search_rrf_k": 1001},
+        {"search_rrf_k": "sixty"},
+        {"search_candidate_k": 5, "search_default_top_k": 6},
+        {"search_lexical_k": 10, "search_dense_k": 10, "search_candidate_k": 21},
+    ],
+)
+def test_invalid_hybrid_settings_rejected(make_settings, overrides):
+    with pytest.raises(ValidationError):
+        make_settings(**overrides)
+
+
+def test_candidate_k_may_equal_the_sum_of_source_depths(make_settings):
+    s = make_settings(search_lexical_k=10, search_dense_k=15, search_candidate_k=25)
+    assert s.search_candidate_k == 25
+    assert make_settings(search_rrf_k=1).search_rrf_k == 1
+    assert make_settings(search_rrf_k=1000).search_rrf_k == 1000
+
+
+def test_hybrid_settings_read_from_environment(monkeypatch):
+    monkeypatch.setenv("POSTGRES_PASSWORD", "pw")
+    monkeypatch.setenv("SEARCH_CANDIDATE_K", "30")
+    monkeypatch.setenv("SEARCH_RRF_K", "20")
+    s = Settings(_env_file=None)
+    assert (s.search_candidate_k, s.search_rrf_k) == (30, 20)
