@@ -26,8 +26,9 @@ from ecommerce_search.search.lexical import LexicalHit, LexicalResult, lexical_s
 
 HYBRID_SEARCH_VERSION = "v1_hybrid"
 FUSION_METHOD = "rrf"
-# The configured `rrf_k` is a candidate until the M5 provisional selection is reviewed.
-RRF_K_STATUS: Literal["candidate_pending_selection", "provisional"] = "candidate_pending_selection"
+# The default `rrf_k` was selected by the committed M5 Phase-S predeclared tie rule; it remains
+# provisional until Golden Dataset evaluation in M10.
+RRF_K_STATUS: Literal["candidate_pending_selection", "provisional"] = "provisional"
 
 SNAPSHOT_SQL = text("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY")
 

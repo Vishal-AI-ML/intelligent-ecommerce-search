@@ -185,7 +185,7 @@ def test_dense_settings_read_from_environment(monkeypatch, tmp_path):
 def test_hybrid_defaults(make_settings):
     s = make_settings()
     assert (s.search_lexical_k, s.search_dense_k, s.search_candidate_k) == (50, 50, 50)
-    assert s.search_rrf_k == 60
+    assert s.search_rrf_k == 100
 
 
 @pytest.mark.parametrize(
@@ -218,3 +218,18 @@ def test_hybrid_settings_read_from_environment(monkeypatch):
     monkeypatch.setenv("SEARCH_RRF_K", "20")
     s = Settings(_env_file=None)
     assert (s.search_candidate_k, s.search_rrf_k) == (30, 20)
+
+
+@pytest.mark.parametrize(("raw", "expected"), [("1", 1), ("60", 60), ("1000", 1000)])
+def test_rrf_k_environment_override_within_range(monkeypatch, raw, expected):
+    monkeypatch.setenv("POSTGRES_PASSWORD", "pw")
+    monkeypatch.setenv("SEARCH_RRF_K", raw)
+    assert Settings(_env_file=None).search_rrf_k == expected
+
+
+@pytest.mark.parametrize("raw", ["0", "1001"])
+def test_rrf_k_environment_override_out_of_range_rejected(monkeypatch, raw):
+    monkeypatch.setenv("POSTGRES_PASSWORD", "pw")
+    monkeypatch.setenv("SEARCH_RRF_K", raw)
+    with pytest.raises(ValidationError):
+        Settings(_env_file=None)

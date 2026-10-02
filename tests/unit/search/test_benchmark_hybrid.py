@@ -1273,18 +1273,44 @@ class SpyVerify:
         return self.problems
 
 
+@pytest.fixture
+def pre_selection_status(monkeypatch):
+    """Phase S was approved for the pre-selection runtime; reproduce its status for these fakes."""
+    import ecommerce_search.search.hybrid as hybrid
+
+    monkeypatch.setattr(hybrid, "RRF_K_STATUS", bench.PHASE_S_RRF_K_STATUS)
+
+
 def test_the_approved_phase_s_settings_are_pinned_to_the_production_names():
     from ecommerce_search.config import Settings
-    from ecommerce_search.search.hybrid import RRF_K_STATUS
 
     assert bench.PHASE_S_SETTINGS == APPROVED_SETTINGS
-    assert {n: Settings.model_fields[n].default for n in APPROVED_SETTINGS} == APPROVED_SETTINGS
+    assert set(APPROVED_SETTINGS) <= set(Settings.model_fields)
     assert bench.PHASE_S_FROZEN == {
         "top_k": 10,
         "source_depth": 50,
         "rrf_k_grid": [1, 5, 10, 20, 40, 60, 100],
     }
-    assert bench.PHASE_S_RRF_K_STATUS == "candidate_pending_selection" == RRF_K_STATUS
+    assert bench.PHASE_S_RRF_K_STATUS == "candidate_pending_selection"
+
+
+def test_phase_s_refuses_the_adopted_provisional_runtime_defaults(monkeypatch):
+    from ecommerce_search.config import Settings
+    from ecommerce_search.search.hybrid import RRF_K_STATUS
+
+    for name in APPROVED_SETTINGS:
+        monkeypatch.delenv(name.upper(), raising=False)
+    monkeypatch.setenv("POSTGRES_PASSWORD", "unit-test-password")
+    defaults = Settings(_env_file=None)
+    assert {n: getattr(defaults, n) for n in APPROVED_SETTINGS} == {
+        **APPROVED_SETTINGS,
+        "search_rrf_k": 100,
+    }
+    assert RRF_K_STATUS == "provisional"
+    with pytest.raises(bench.ProvenanceError, match="approved settings: search_rrf_k=100"):
+        bench.check_phase_settings("S", defaults, RRF_K_STATUS)
+    with pytest.raises(bench.ProvenanceError, match="only before selection"):
+        bench.check_phase_settings("S", fake_settings(None), RRF_K_STATUS)
 
 
 def test_approved_phase_s_settings_pass(tmp_path):
@@ -1326,8 +1352,8 @@ def test_every_non_approved_phase_s_setting_is_refused(tmp_path, name, value):
 def test_non_default_environment_values_are_refused_not_recorded(monkeypatch, variable, value):
     from ecommerce_search.config import Settings
 
-    for name in APPROVED_SETTINGS:
-        monkeypatch.delenv(name.upper(), raising=False)
+    for name, approved_value in APPROVED_SETTINGS.items():
+        monkeypatch.setenv(name.upper(), str(approved_value))
     monkeypatch.setenv("POSTGRES_PASSWORD", "unit-test-password")
     approved = Settings(_env_file=None)
     bench.check_phase_settings("S", approved, "candidate_pending_selection")
@@ -1367,7 +1393,7 @@ def test_phase_cl_has_no_approved_settings_yet(tmp_path):
         bench.check_phase_settings("CL", fake_settings(tmp_path), "candidate_pending_selection")
 
 
-def test_preflight_passes_only_with_every_invariant(tmp_path):
+def test_preflight_passes_only_with_every_invariant(tmp_path, pre_selection_status):
     calls, verify = [], SpyVerify()
     result = bench.preflight("S", fake_settings(tmp_path), git=fake_git(calls=calls), verify=verify)
     assert result["provenance"]["pinned_commit"] == bench.CORE_COMMIT
@@ -1395,7 +1421,9 @@ def test_preflight_refuses_phase_cl_before_git_settings_or_model_work(tmp_path):
         (fake_git(), {}, ("sha256 mismatch",), "failed verification"),
     ],
 )
-def test_preflight_refuses_each_failed_invariant(tmp_path, git, overrides, problems, message):
+def test_preflight_refuses_each_failed_invariant(
+    tmp_path, pre_selection_status, git, overrides, problems, message
+):
     verify = SpyVerify(problems)
     with pytest.raises(PROVENANCE_ERRORS, match=message):
         bench.preflight("S", fake_settings(tmp_path, **overrides), git=git, verify=verify)
@@ -1421,7 +1449,7 @@ class SetupReached(Exception):
 
 
 @pytest.fixture
-def child_env(monkeypatch, tmp_path):
+def child_env(monkeypatch, tmp_path, pre_selection_status):
     import sqlalchemy
 
     import ecommerce_search.config as config

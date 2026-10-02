@@ -77,3 +77,11 @@ def test_hybrid_settings_reach_only_the_api_service():
         assert name not in db and name not in migrate
         assert name in api
     assert "x-app-env" not in api and "SEARCH_" not in COMPOSE.split("services:")[0]
+
+
+def test_the_provisional_rrf_k_default_is_forwarded_once_to_the_api():
+    assert Settings.model_fields["search_rrf_k"].default == 100
+    assert COMPOSE.count("SEARCH_RRF_K") == 2  # the key and its interpolation, on one line
+    api = re.split(r"^volumes:", COMPOSE.split("  api:")[1], flags=re.MULTILINE)[0]
+    assert "      SEARCH_RRF_K: ${SEARCH_RRF_K:-100}" in api
+    assert re.search(r"^SEARCH_RRF_K=100$", ENV_EXAMPLE, re.MULTILINE)

@@ -170,5 +170,5 @@ def test_invalid_parameters_are_rejected(value):
         fuse_rrf(lex("A"), [], rrf_k=60, candidate_k=value)
 
 
-def test_rrf_k_status_marks_the_value_as_pending_selection():
-    assert RRF_K_STATUS == "candidate_pending_selection"
+def test_rrf_k_status_marks_the_value_as_provisional():
+    assert RRF_K_STATUS == "provisional"

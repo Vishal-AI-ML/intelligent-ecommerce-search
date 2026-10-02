@@ -75,7 +75,8 @@ def test_sources_match_search_and_dense_and_fusion_matches_an_oracle(settings, c
             assert body.dense_hit_count == len(dense) == 50
             by_lexical = {r["product_id"]: r for r in lexical}
             by_dense = {r["product_id"]: r for r in dense}
-            expected = oracle(list(by_lexical), list(by_dense), 60)[:50]
+            assert body.fusion.rrf_k == settings.search_rrf_k
+            expected = oracle(list(by_lexical), list(by_dense), body.fusion.rrf_k)[:50]
             assert [r.product_id for r in body.results] == expected
             assert body.overlap_count == len(by_lexical.keys() & by_dense.keys())
             assert body.fused_count == len(by_lexical.keys() | by_dense.keys())

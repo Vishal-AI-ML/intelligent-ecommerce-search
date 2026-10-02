@@ -58,9 +58,10 @@ class Settings(BaseSettings):
     # Hybrid search (Milestone 5). Source depths are `search_lexical_k` and `search_dense_k`;
     # `search_candidate_k` is the fused list length and the maximum accepted hybrid `top_k`.
     search_candidate_k: int = Field(default=50, ge=1, le=2000)
-    # Reciprocal Rank Fusion constant. 60 is a candidate pending the M5 provisional selection
-    # (see `RRF_K_STATUS` in `search/hybrid.py`); it is not an evidence-backed value.
-    search_rrf_k: int = Field(default=60, ge=1, le=1000)
+    # Reciprocal Rank Fusion constant. 100 was selected by the committed M5 Phase-S predeclared
+    # tie rule; it remains provisional until Golden Dataset evaluation in M10 (see `RRF_K_STATUS`
+    # in `search/hybrid.py`).
+    search_rrf_k: int = Field(default=100, ge=1, le=1000)
 
     @model_validator(mode="after")
     def _default_top_k_within_limit(self) -> "Settings":

@@ -180,11 +180,7 @@ def test_get_success_shape_and_truthful_metadata(client_for, events):
     assert body.embedding_model_revision == "1110a243fdf4706b3f48f1d95db1a4f5529b4d41"
     assert body.embedding_dimension == 384 and body.distance_metric == "cosine"
     fusion = body.fusion
-    assert (fusion.method, fusion.rrf_k, fusion.rrf_k_status) == (
-        "rrf",
-        60,
-        "candidate_pending_selection",
-    )
+    assert (fusion.method, fusion.rrf_k, fusion.rrf_k_status) == ("rrf", 100, "provisional")
     assert (fusion.lexical_k, fusion.dense_k, fusion.candidate_k) == (50, 50, 50)
     assert body.dense_status == "used"
     assert (body.lexical_hit_count, body.dense_hit_count, body.overlap_count) == (3, 2, 1)
@@ -196,7 +192,7 @@ def test_get_success_shape_and_truthful_metadata(client_for, events):
         (2, "P1", 1, None),
         (3, "P2", 2, None),
     ]
-    assert body.results[0].rrf_score == pytest.approx(1 / 63 + 1 / 61)
+    assert body.results[0].rrf_score == pytest.approx(1 / 103 + 1 / 101)
     assert body.results[0].title == "lexical title P3"  # lexical display fields win
     assert body.results[1].dense_score is None and body.results[1].lexical_score == 1.0
     latency = body.latency_ms
@@ -246,7 +242,23 @@ def test_get_and_post_share_one_path(client_for):
         ).json()
     for payload in (got, posted):
         payload.pop("latency_ms")
+        assert (payload["fusion"]["rrf_k"], payload["fusion"]["rrf_k_status"]) == (
+            100,
+            "provisional",
+        )
     assert got == posted
+
+
+def test_an_explicit_rrf_k_setting_is_used_and_reported(client_for):
+    with client_for(search_rrf_k=60) as client:
+        got = client.get("/search/hybrid", params={"q": "shoes", "top_k": 1}).json()
+        posted = client.post("/search/hybrid", json={"query": "shoes", "top_k": 1}).json()
+    for payload in (got, posted):
+        assert (payload["fusion"]["rrf_k"], payload["fusion"]["rrf_k_status"]) == (
+            60,
+            "provisional",
+        )
+        assert payload["results"][0]["rrf_score"] == pytest.approx(1 / 63 + 1 / 61)
 
 
 def test_top_k_results_are_a_prefix_of_larger_top_k(client_for):
@@ -366,7 +378,7 @@ def test_post_validation_errors_are_422(client_for, events, body):
 def test_get_ignores_unknown_fusion_parameters(client_for):
     with client_for() as client:
         body = client.get("/search/hybrid", params={"q": "shoes", "rrf_k": 1, "lexical_k": 2})
-    assert body.json()["fusion"]["rrf_k"] == 60 and body.json()["fusion"]["lexical_k"] == 50
+    assert body.json()["fusion"]["rrf_k"] == 100 and body.json()["fusion"]["lexical_k"] == 50
 
 
 def test_query_over_the_model_token_limit_is_422_before_any_transaction(client_for, events):
