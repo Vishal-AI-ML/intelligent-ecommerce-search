@@ -574,15 +574,52 @@ def run_record(run, phase):
     }
 
 
+PINNED = {
+    "S": "f7cb2757e669cb58b281c9ac3d8a37b6da7e1a7a",
+    "CL": "86f7b68f39155a002390bffc110036ad75dbb326",
+}
+HEADER_SETTINGS = {
+    "S": {
+        "search_rrf_k": 60,
+        "search_candidate_k": 50,
+        "search_lexical_k": 50,
+        "search_dense_k": 50,
+    },
+    "CL": {
+        "search_rrf_k": 100,
+        "search_candidate_k": 50,
+        "search_lexical_k": 50,
+        "search_dense_k": 50,
+        "rrf_k_status": "provisional",
+    },
+}
+
+
+def model_identity():
+    from ecommerce_search.embeddings.spec import ALL_MINILM_L6_V2 as spec
+
+    return {
+        "model_id": spec.model_id,
+        "revision": spec.revision,
+        "dimension": spec.dimension,
+        "max_seq_length": spec.max_seq_length,
+        "normalize": spec.normalize,
+        "config_sha256": spec.config_sha256(),
+        "manifest_problems": [],
+    }
+
+
 def make_header(phase, protocol=None, experiment_id=None):
     return {
-        "experiment_id": experiment_id or f"hybrid-test-{phase.lower()}",
+        "experiment_id": experiment_id or f"hybrid-m5-{phase.lower()}-20261002T100000Z-0123abcd",
         "generated_at_utc": "2026-10-02T10:00:00+00:00",
         "provenance": {
             "harness_head": "f" * 40,
-            "pinned_commit": bench.CORE_COMMIT,
+            "pinned_commit": PINNED[phase],
             "guarded": list(bench.GUARDED_PATHS),
         },
+        "model": model_identity(),
+        "settings": dict(HEADER_SETTINGS[phase]),
         "source": {"git_working_tree_dirty": False},
         "catalog": bench.committed_catalog_identity(),
         "embedding_text_version": EMBEDDING_TEXT_VERSION,
@@ -659,7 +696,7 @@ def make_cl_records(header, gap_at=None, status="provisional"):
             stages = bench.ENDPOINTS[endpoint]["stages"]
             for qi, query in enumerate(bench.QUERIES):
                 lexical, dense = source_lists(query)
-                hybrid = bench.rrf_oracle(lexical, dense, 60)[:10]
+                hybrid = bench.rrf_oracle(lexical, dense, 100)[:10]
                 ids = {"search": lexical, "dense": dense[:10], "hybrid": hybrid}[endpoint]
                 result = {
                     "record": "results",
@@ -686,7 +723,7 @@ def make_cl_records(header, gap_at=None, status="provisional"):
                             "rrf_scores": [0.0] * len(ids),
                             "fusion": {
                                 "method": "rrf",
-                                "rrf_k": 60,
+                                "rrf_k": 100,
                                 "rrf_k_status": status,
                                 "lexical_k": 50,
                                 "dense_k": 50,
@@ -908,7 +945,7 @@ def test_phase_cl_recomputes_latency_comparison_and_determinism():
     assert run1["comparison"]["mean_consistency"]["search"] == {"fraction": "1", "float": 1.0}
     assert run1["comparison"]["top10_with_tied_lexical_scores"]["search"] == 17
     assert derived["determinism"]["across_runs_identical"] is True
-    assert derived["hybrid_fusion"] == {"rrf_k": 60, "rrf_k_status": "provisional"}
+    assert derived["hybrid_fusion"] == {"rrf_k": 100, "rrf_k_status": "provisional"}
     assert derived["label"] == "provisional, non-authoritative"
 
 
@@ -1137,6 +1174,93 @@ def test_cli_verify_exit_codes(tmp_path, capsys):
     assert "does not recompute" in capsys.readouterr().out
 
 
+# ---- phase-specific header identity ------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("phase", ["S", "CL"])
+def test_a_correct_phase_header_has_no_problems(phase):
+    assert bench.check_phase_header(make_header(phase)) == []
+
+
+def test_header_settings_keep_the_historical_phase_s_shape_and_record_the_cl_status():
+    fixed_s = {**APPROVED_SETTINGS, "rrf_k_status": "candidate_pending_selection"}
+    fixed_cl = {**CL_APPROVED_SETTINGS, "rrf_k_status": "provisional"}
+    assert bench.header_settings("S", fixed_s) == HEADER_SETTINGS["S"]
+    assert bench.header_settings("CL", fixed_cl) == HEADER_SETTINGS["CL"]
+
+
+def _edited(phase, path, value):
+    header = make_header(phase)
+    *parents, key = path
+    target = header
+    for part in parents:
+        target = target[part]
+    if value is KeyError:
+        target.pop(key)
+    else:
+        target[key] = value
+    return header
+
+
+@pytest.mark.parametrize(
+    ("phase", "path", "value", "message"),
+    [
+        ("CL", ("provenance", "pinned_commit"), KeyError, "pinned commit"),
+        ("CL", ("provenance", "pinned_commit"), "0" * 40, "pinned commit"),
+        ("CL", ("provenance", "pinned_commit"), PINNED["S"], "pinned commit"),
+        ("S", ("provenance", "pinned_commit"), PINNED["CL"], "pinned commit"),
+        ("CL", ("provenance", "guarded"), ["src/"], "guarded paths"),
+        ("CL", ("provenance", "harness_head"), KeyError, "harness HEAD"),
+        ("CL", ("settings", "search_rrf_k"), 60, "settings"),
+        ("CL", ("settings", "search_candidate_k"), 40, "settings"),
+        ("CL", ("settings", "rrf_k_status"), "candidate_pending_selection", "settings"),
+        ("CL", ("settings", "rrf_k_status"), KeyError, "settings"),
+        ("S", ("settings", "search_rrf_k"), 100, "settings"),
+        ("S", ("settings", "rrf_k_status"), "provisional", "settings"),
+        ("CL", ("experiment_id",), "hybrid-m5-s-20261002T100000Z-0123abcd", "experiment id"),
+        ("S", ("experiment_id",), "hybrid-m5-cl-20261002T100000Z-0123abcd", "experiment id"),
+        ("CL", ("model", "revision"), "0" * 40, "model identity"),
+        ("CL", ("model",), KeyError, "model identity"),
+        ("CL", ("protocol",), {"phase": "X"}, "unknown protocol phase"),
+    ],
+)
+def test_a_wrong_or_swapped_phase_header_is_refused(phase, path, value, message):
+    problems = bench.check_phase_header(_edited(phase, path, value))
+    assert any(message in p for p in problems), problems
+
+
+@pytest.mark.parametrize(("phase", "other"), [("S", "CL"), ("CL", "S")])
+def test_an_artifact_relabelled_as_the_other_phase_does_not_verify(tmp_path, phase, other):
+    json_path, _, _ = write(tmp_path, phase)
+    summary, raw, lines = _raw_lines(json_path)
+    header = json.loads(lines[0])
+    header["protocol"] = SMALL_CL if other == "CL" else bench.PREDECLARED["S"]
+    lines[0] = bench.dumps(header)
+    summary["header"] = {k: v for k, v in header.items() if k != "record"}
+    _forge(json_path, raw, lines, summary)
+    problems = verify(json_path, other)
+    assert any(f"not the Phase {other} commit" in p for p in problems), problems
+    assert any(f"approved Phase {other} settings" in p for p in problems), problems
+    assert any(f"not a Phase {other} harness id" in p for p in problems), problems
+
+
+@pytest.mark.parametrize(
+    ("change", "message"),
+    [
+        ({"rrf_k": 60}, "fusion rrf_k or status"),
+        ({"rrf_k_status": "candidate_pending_selection"}, "fusion rrf_k or status"),
+    ],
+)
+def test_cl_responses_with_another_fusion_setting_do_not_verify(tmp_path, change, message):
+    header = make_header("CL", SMALL_CL)
+    records = make_cl_records(header)
+    for record in records:
+        if record["record"] == "results" and record["endpoint"] == "hybrid":
+            record["fusion"].update(change)
+    json_path = bench.write_artifacts(tmp_path, header, records, {"power_events": {}})
+    assert any(message in p for p in verify(json_path, "CL"))
+
+
 # ---- provenance and safety -----------------------------------------------------------------------------
 
 HEAD = "e" * 40
@@ -1169,7 +1293,8 @@ def fake_git(status=b"", diff=b"", ancestor=True, calls=None, ls_files=b"", igno
 
 def test_core_commit_and_guarded_paths_are_pinned():
     assert bench.CORE_COMMIT == "f7cb2757e669cb58b281c9ac3d8a37b6da7e1a7a"
-    assert bench.PHASE_COMMITS == {"S": bench.CORE_COMMIT, "CL": None}
+    assert bench.RUNTIME_COMMIT == "86f7b68f39155a002390bffc110036ad75dbb326"
+    assert bench.PHASE_COMMITS == PINNED
     assert bench.GUARDED_PATHS == (
         "src/",
         "migrations/",
@@ -1228,13 +1353,45 @@ def test_the_pinned_commit_must_be_an_ancestor():
         bench.check_provenance(ROOT, "S", git=fake_git(ancestor=False))
 
 
-def test_phase_cl_refuses_until_its_runtime_commit_is_pinned():
+def test_phase_cl_is_checked_against_the_reviewed_runtime_commit():
+    calls = []
+    result = bench.check_provenance(ROOT, "CL", git=fake_git(calls=calls))
+    assert result == {
+        "harness_head": HEAD,
+        "pinned_commit": "86f7b68f39155a002390bffc110036ad75dbb326",
+        "guarded": list(bench.GUARDED_PATHS),
+    }
+    assert [c[0] for c in calls] == ["status", "rev-parse", "merge-base", "diff"]
+    assert calls[2] == ("merge-base", "--is-ancestor", PINNED["CL"], HEAD)
+    diff_call = calls[3]
+    assert diff_call[:4] == ("diff", "--name-only", PINNED["CL"], HEAD)
+    assert diff_call[5:] == bench.GUARDED_PATHS
+    with pytest.raises(bench.BenchmarkError, match="unknown phase"):
+        bench.check_provenance(ROOT, "X", git=fake_git())
+
+
+@pytest.mark.parametrize(
+    ("git", "message"),
+    [
+        (fake_git(ancestor=False), "missing or not an ancestor"),
+        (fake_git(status=b"?? scripts/new.py\n"), "not clean"),
+        (fake_git(status=b" M scripts/benchmark_hybrid.py\n"), "not clean"),
+        (fake_git(diff=b"src/ecommerce_search/search/hybrid.py\n"), "runtime-affecting"),
+        (fake_git(diff=b"src/ecommerce_search/config/settings.py\n"), "runtime-affecting"),
+        (fake_git(diff=b"uv.lock\n"), "runtime-affecting"),
+    ],
+)
+def test_phase_cl_refuses_a_non_ancestor_dirty_or_runtime_different_tree(git, message):
+    with pytest.raises(bench.ProvenanceError, match=message):
+        bench.check_provenance(ROOT, "CL", git=git)
+
+
+def test_a_missing_runtime_pin_is_refused_before_any_git_call(monkeypatch):
+    monkeypatch.setattr(bench, "PHASE_COMMITS", {**bench.PHASE_COMMITS, "CL": None})
     calls = []
     with pytest.raises(bench.ProvenanceError, match="no pinned runtime commit"):
         bench.check_provenance(ROOT, "CL", git=fake_git(calls=calls))
     assert calls == []
-    with pytest.raises(bench.BenchmarkError, match="unknown phase"):
-        bench.check_provenance(ROOT, "X", git=fake_git())
 
 
 # ---- fixed Phase-S settings and the shared preflight (fakes only) ----------------------------------
@@ -1388,9 +1545,159 @@ def test_a_changed_phase_s_protocol_constant_is_refused(tmp_path, monkeypatch, a
         bench.check_phase_settings("S", fake_settings(tmp_path), "candidate_pending_selection")
 
 
-def test_phase_cl_has_no_approved_settings_yet(tmp_path):
-    with pytest.raises(bench.ProvenanceError, match="no approved runtime settings"):
-        bench.check_phase_settings("CL", fake_settings(tmp_path), "candidate_pending_selection")
+CL_APPROVED_SETTINGS = {
+    "search_lexical_k": 50,
+    "search_dense_k": 50,
+    "search_candidate_k": 50,
+    "search_rrf_k": 100,
+}
+
+
+def cl_settings(models_dir, **overrides):
+    return fake_settings(models_dir, **{**CL_APPROVED_SETTINGS, **overrides})
+
+
+def test_the_approved_phase_cl_settings_and_protocol_are_pinned():
+    from ecommerce_search.config import Settings
+
+    assert bench.PHASE_CL_SETTINGS == CL_APPROVED_SETTINGS
+    assert set(CL_APPROVED_SETTINGS) <= set(Settings.model_fields)
+    assert bench.PHASE_CL_RRF_K_STATUS == "provisional"
+    assert bench.PHASE_CL_FROZEN == {
+        "top_k": 10,
+        "runs": 3,
+        "cold_per_query": 1,
+        "warmup_per_query": 20,
+        "samples_per_query": 200,
+        "endpoint_schedule": {
+            "1": ["search", "dense", "hybrid"],
+            "2": ["dense", "hybrid", "search"],
+            "3": ["hybrid", "search", "dense"],
+        },
+    }
+
+
+def test_phase_cl_accepts_the_reviewed_runtime_defaults(monkeypatch):
+    from ecommerce_search.config import Settings
+    from ecommerce_search.search.hybrid import RRF_K_STATUS
+
+    for name in CL_APPROVED_SETTINGS:
+        monkeypatch.delenv(name.upper(), raising=False)
+    monkeypatch.setenv("POSTGRES_PASSWORD", "unit-test-password")
+    defaults = Settings(_env_file=None)
+    result = bench.check_phase_settings("CL", defaults, RRF_K_STATUS)
+    assert result == {**CL_APPROVED_SETTINGS, "rrf_k_status": "provisional"}
+
+
+@pytest.mark.parametrize(
+    ("name", "value"),
+    [
+        ("search_lexical_k", 49),
+        ("search_lexical_k", 100),
+        ("search_dense_k", 10),
+        ("search_dense_k", 51),
+        ("search_candidate_k", 10),
+        ("search_candidate_k", 100),
+        ("search_rrf_k", 60),
+        ("search_rrf_k", 99),
+        ("search_rrf_k", 101),
+        ("search_rrf_k", "100"),
+        ("search_rrf_k", None),
+    ],
+)
+def test_every_non_approved_phase_cl_setting_is_refused(tmp_path, name, value):
+    with pytest.raises(
+        bench.ProvenanceError, match=f"Phase CL requires the approved settings: {name}="
+    ):
+        bench.check_phase_settings("CL", cl_settings(tmp_path, **{name: value}), "provisional")
+
+
+@pytest.mark.parametrize("status", ["candidate_pending_selection", "final", ""])
+def test_phase_cl_refuses_any_other_rrf_k_status(tmp_path, status):
+    with pytest.raises(bench.ProvenanceError, match="Phase CL runs only at the adopted runtime"):
+        bench.check_phase_settings("CL", cl_settings(tmp_path), status)
+
+
+def test_phase_s_settings_never_pass_phase_cl_and_the_reverse(tmp_path):
+    with pytest.raises(bench.ProvenanceError, match="search_rrf_k=60"):
+        bench.check_phase_settings("CL", fake_settings(tmp_path), "provisional")
+    with pytest.raises(bench.ProvenanceError, match="search_rrf_k=100"):
+        bench.check_phase_settings("S", cl_settings(tmp_path), "candidate_pending_selection")
+    with pytest.raises(bench.BenchmarkError, match="unknown phase"):
+        bench.check_phase_settings("X", cl_settings(tmp_path), "provisional")
+
+
+@pytest.mark.parametrize(
+    ("attribute", "value"),
+    [
+        ("TOP_K", 20),
+        ("ENDPOINT_SCHEDULE", {**bench.ENDPOINT_SCHEDULE, 2: ("search", "dense", "hybrid")}),
+        ("PREDECLARED", {**bench.PREDECLARED, "CL": {**bench.PREDECLARED["CL"], "runs": 2}}),
+        (
+            "PREDECLARED",
+            {**bench.PREDECLARED, "CL": {**bench.PREDECLARED["CL"], "warmup_per_query": 5}},
+        ),
+        (
+            "PREDECLARED",
+            {**bench.PREDECLARED, "CL": {**bench.PREDECLARED["CL"], "samples_per_query": 100}},
+        ),
+        (
+            "PREDECLARED",
+            {**bench.PREDECLARED, "CL": {**bench.PREDECLARED["CL"], "cold_per_query": 2}},
+        ),
+        ("PREDECLARED", {**bench.PREDECLARED, "CL": {**bench.PREDECLARED["CL"], "top_k": 5}}),
+        (
+            "PREDECLARED",
+            {
+                **bench.PREDECLARED,
+                "CL": {**bench.PREDECLARED["CL"], "endpoint_schedule": {"1": ["search"]}},
+            },
+        ),
+    ],
+)
+def test_a_changed_phase_cl_protocol_constant_is_refused(tmp_path, monkeypatch, attribute, value):
+    monkeypatch.setattr(bench, attribute, value)
+    with pytest.raises(bench.ProvenanceError, match="Phase CL .* differs from approval"):
+        bench.check_phase_settings("CL", cl_settings(tmp_path), "provisional")
+
+
+@pytest.fixture
+def adopted_status(monkeypatch):
+    import ecommerce_search.search.hybrid as hybrid
+
+    monkeypatch.setattr(hybrid, "RRF_K_STATUS", bench.PHASE_CL_RRF_K_STATUS)
+
+
+def test_preflight_passes_phase_cl_with_the_approved_runtime(tmp_path, adopted_status):
+    calls, verify = [], SpyVerify()
+    result = bench.preflight("CL", cl_settings(tmp_path), git=fake_git(calls=calls), verify=verify)
+    assert result["provenance"]["pinned_commit"] == PINNED["CL"]
+    assert result["settings"] == {**CL_APPROVED_SETTINGS, "rrf_k_status": "provisional"}
+    assert result["model"] == model_identity()
+    assert [c[0] for c in calls] == ["status", "rev-parse", "merge-base", "diff"]
+    assert len(verify.calls) == 1
+
+
+@pytest.mark.parametrize(
+    ("git", "overrides", "status", "problems", "message"),
+    [
+        (fake_git(ancestor=False), {}, "provisional", (), "not an ancestor"),
+        (fake_git(diff=b"src/ecommerce_search/api/hybrid.py\n"), {}, "provisional", (), "runtime"),
+        (fake_git(), {"search_rrf_k": 60}, "provisional", (), "approved settings"),
+        (fake_git(), {}, "candidate_pending_selection", (), "adopted runtime"),
+        (fake_git(), {}, "provisional", ("sha256 mismatch",), "failed verification"),
+    ],
+)
+def test_preflight_refuses_each_failed_phase_cl_invariant(
+    tmp_path, monkeypatch, git, overrides, status, problems, message
+):
+    import ecommerce_search.search.hybrid as hybrid
+
+    monkeypatch.setattr(hybrid, "RRF_K_STATUS", status)
+    verify = SpyVerify(problems)
+    with pytest.raises(PROVENANCE_ERRORS, match=message):
+        bench.preflight("CL", cl_settings(tmp_path, **overrides), git=git, verify=verify)
+    assert len(verify.calls) == (1 if problems else 0)  # the manifest is checked last
 
 
 def test_preflight_passes_only_with_every_invariant(tmp_path, pre_selection_status):
@@ -1404,11 +1711,13 @@ def test_preflight_passes_only_with_every_invariant(tmp_path, pre_selection_stat
     assert len(verify.calls) == 1 and verify.calls[0][0] == tmp_path
 
 
-def test_preflight_refuses_phase_cl_before_git_settings_or_model_work(tmp_path):
-    calls, verify = [], SpyVerify()
-    with pytest.raises(bench.ProvenanceError, match="no pinned runtime commit"):
-        bench.preflight("CL", fake_settings(tmp_path), git=fake_git(calls=calls), verify=verify)
-    assert calls == [] and verify.calls == []
+def test_preflight_refuses_phase_s_at_the_adopted_runtime(tmp_path, adopted_status):
+    verify = SpyVerify()
+    with pytest.raises(bench.ProvenanceError, match="approved settings: search_rrf_k=100"):
+        bench.preflight("S", cl_settings(tmp_path), git=fake_git(), verify=verify)
+    with pytest.raises(bench.ProvenanceError, match="only before selection"):
+        bench.preflight("S", fake_settings(tmp_path), git=fake_git(), verify=verify)
+    assert verify.calls == []
 
 
 @pytest.mark.parametrize(
@@ -1486,10 +1795,83 @@ def child_argv(tmp_path, phase="S", **overrides):
     return ["--child", *(x for k, v in args.items() if v is not None for x in (k, v))]
 
 
-def test_direct_child_cl_cannot_bypass_the_runtime_commit_refusal(child_env, tmp_path):
-    with pytest.raises(bench.ProvenanceError, match="no pinned runtime commit"):
+@pytest.fixture
+def cl_child_env(child_env, tmp_path, adopted_status):
+    child_env.settings = cl_settings(tmp_path)
+    return child_env
+
+
+def test_an_approved_direct_child_cl_reaches_setup_only_after_every_check(cl_child_env, tmp_path):
+    with pytest.raises(SetupReached):
         bench.main(child_argv(tmp_path, "CL"))
-    assert child_env.git_calls == [] and child_env.verify.calls == []
+    assert cl_child_env.guard == [True]
+    calls = cl_child_env.git_calls
+    assert [c[0] for c in calls] == ["status", "rev-parse", "merge-base", "diff"]
+    assert calls[2] == ("merge-base", "--is-ancestor", PINNED["CL"], HEAD)
+    assert calls[3][2] == PINNED["CL"]
+    assert len(cl_child_env.verify.calls) == 1
+
+
+@pytest.mark.parametrize(
+    ("change", "message"),
+    [
+        ({"git": fake_git(status=b"?? scripts/new.py\n")}, "not clean"),
+        ({"git": fake_git(ancestor=False)}, "missing or not an ancestor"),
+        ({"git": fake_git(diff=b"src/ecommerce_search/search/hybrid.py\n")}, "runtime-affecting"),
+        ({"pin": None}, "no pinned runtime commit"),
+        ({"settings": {"search_lexical_k": 49}}, "search_lexical_k"),
+        ({"settings": {"search_dense_k": 49}}, "search_dense_k"),
+        ({"settings": {"search_candidate_k": 49}}, "search_candidate_k"),
+        ({"settings": {"search_rrf_k": 60}}, "search_rrf_k"),
+        ({"status": "candidate_pending_selection"}, "adopted runtime"),
+        ({"problems": ["sha256 mismatch"]}, "failed verification"),
+        ({"table_sha": "0" * 64}, "expectation table"),
+        ({"query_sha": "0" * 64}, "QUERY_SET_SHA256"),
+    ],
+)
+def test_direct_child_cl_cannot_bypass_provenance_protocol_settings_or_model_checks(
+    cl_child_env, tmp_path, monkeypatch, change, message
+):
+    import ecommerce_search.search.hybrid as hybrid
+
+    if "git" in change:
+        monkeypatch.setattr(bench, "_git", change["git"])
+    if "pin" in change:
+        monkeypatch.setattr(bench, "PHASE_COMMITS", {**bench.PHASE_COMMITS, "CL": change["pin"]})
+    if "settings" in change:
+        cl_child_env.settings = cl_settings(tmp_path, **change["settings"])
+    if "status" in change:
+        monkeypatch.setattr(hybrid, "RRF_K_STATUS", change["status"])
+    if "problems" in change:
+        cl_child_env.verify.problems = change["problems"]
+    if "table_sha" in change or "query_sha" in change:
+        protocol, query_sha, table_sha = bench.check_protocol_identity.__defaults__
+        monkeypatch.setattr(
+            bench.check_protocol_identity,
+            "__defaults__",
+            (protocol, change.get("query_sha", query_sha), change.get("table_sha", table_sha)),
+        )
+    with pytest.raises(PROVENANCE_ERRORS, match=message):
+        bench.main(child_argv(tmp_path, "CL"))
+    assert not (tmp_path / "run1.jsonl").exists()
+
+
+@pytest.mark.parametrize(
+    ("argv", "message"),
+    [
+        ({"--run": "0"}, "child run"),
+        ({"--run": "4"}, "child run"),
+        ({"--warmup": "0", "--samples": "0"}, "sampling"),
+        ({"--warmup": "19"}, "sampling"),
+        ({"--experiment-id": "hybrid-m5-s-20261002T120000Z-0123abcd"}, "experiment id"),
+        ({"--out": str(ROOT / "run1.jsonl")}, "outside the repository"),
+        ({"--database": "ecommerce_search"}, "development database"),
+        ({"--database": "ecommerce_search_bench_xyz"}, "scratch database names"),
+    ],
+)
+def test_direct_child_cl_arguments_are_refused_before_setup(cl_child_env, tmp_path, argv, message):
+    with pytest.raises(bench.BenchmarkError, match=message):
+        bench.main(child_argv(tmp_path, "CL", **argv))
     assert not (tmp_path / "run1.jsonl").exists()
 
 

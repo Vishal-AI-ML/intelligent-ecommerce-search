@@ -28,7 +28,8 @@ Phase S (2 runs, fresh subprocess + scratch DB each): per run the scratch DB is 
   rrf_k. Both runs must be identical, otherwise no value is proposed. The
   outcome is a candidate for a separate review: settings are never changed by this harness.
 Phase CL (3 runs, fresh subprocess + scratch DB each, endpoint order rotated per run): in-process
-  `GET /search`, `/search/dense`, `/search/hybrid` at top_k=10 with the configured settings. Per
+  `GET /search`, `/search/dense`, `/search/hybrid` at top_k=10, only at the pinned
+  `RUNTIME_COMMIT` with its approved settings (rrf_k 100, status provisional). Per
   endpoint and query: 1 cold sample, 20 untimed warm-ups, 200 timed samples. Every stage field,
   `request_ms` and a separately timed `serialization_ms` are recorded; raw samples are never
   dropped. Phase C (counts, zero results, overlaps, hybrid source composition, consistency proxy,
@@ -88,9 +89,9 @@ from ecommerce_search.search.query import normalize_query  # noqa: E402
 
 # Committed M5 core implementation; Phase S must run with identical runtime-affecting paths.
 CORE_COMMIT = "f7cb2757e669cb58b281c9ac3d8a37b6da7e1a7a"
-# Phases C/L run at the final runtime commit (after the reviewed rrf_k change). It is pinned in a
-# separately reviewed harness change; until then Phase CL refuses to run.
-RUNTIME_COMMIT: str | None = None
+# Phases C/L run at the final reviewed runtime commit (the adopted provisional rrf_k = 100). Later
+# harness/test-only commits are allowed; runtime-affecting paths must be identical to it.
+RUNTIME_COMMIT = "86f7b68f39155a002390bffc110036ad75dbb326"
 PHASE_COMMITS: dict[str, str | None] = {"S": CORE_COMMIT, "CL": RUNTIME_COMMIT}
 GUARDED_PATHS: tuple[str, ...] = (
     "src/",
@@ -212,6 +213,26 @@ PHASE_S_SETTINGS: dict[str, int] = {
     "search_rrf_k": 60,  # the pre-selection candidate; never changed by this harness
 }
 PHASE_S_RRF_K_STATUS = "candidate_pending_selection"
+# The approved Phase-CL protocol and the reviewed runtime settings at RUNTIME_COMMIT.
+PHASE_CL_FROZEN: dict[str, object] = {
+    "top_k": 10,
+    "runs": 3,
+    "cold_per_query": 1,
+    "warmup_per_query": 20,
+    "samples_per_query": 200,
+    "endpoint_schedule": {
+        "1": ["search", "dense", "hybrid"],
+        "2": ["dense", "hybrid", "search"],
+        "3": ["hybrid", "search", "dense"],
+    },
+}
+PHASE_CL_SETTINGS: dict[str, int] = {
+    "search_lexical_k": 50,
+    "search_dense_k": 50,
+    "search_candidate_k": 50,
+    "search_rrf_k": 100,  # the adopted provisional value at RUNTIME_COMMIT
+}
+PHASE_CL_RRF_K_STATUS = "provisional"
 EXPERIMENT_ID_RE = re.compile(r"hybrid-m5-(s|cl)-\d{8}T\d{6}Z-[0-9a-f]{8}")
 ENDPOINTS: dict[str, dict] = {
     "search": {"path": "/search", "stages": ("lexical_ms",)},
@@ -539,7 +560,9 @@ def check_provenance(root: Path, phase: str, git: Callable[..., bytes] = _git) -
     try:
         git(root, "merge-base", "--is-ancestor", commit, head)
     except GitError:
-        raise ProvenanceError(f"the pinned commit {commit} is not an ancestor of HEAD") from None
+        raise ProvenanceError(
+            f"the pinned commit {commit} is missing or not an ancestor of HEAD"
+        ) from None
     changed = git(root, "diff", "--name-only", commit, head, "--", *GUARDED_PATHS)
     differing = [line for line in changed.decode().splitlines() if line.strip()]
     if differing:
@@ -552,28 +575,102 @@ def check_provenance(root: Path, phase: str, git: Callable[..., bytes] = _git) -
 def check_phase_settings(phase: str, settings, rrf_k_status: str) -> dict:
     """Refuse unless the harness protocol and the effective runtime configuration are exactly the
     ones the phase was approved for. Values are refused, not merely recorded."""
-    if phase != "S":
-        raise ProvenanceError(
-            f"phase {phase} has no approved runtime settings yet; pin them with its runtime commit"
-        )
-    harness = {"top_k": TOP_K, "source_depth": SOURCE_DEPTH, "rrf_k_grid": list(RRF_K_GRID)}
-    declared = {key: PREDECLARED["S"][key] for key in PHASE_S_FROZEN}
-    if harness != PHASE_S_FROZEN or declared != PHASE_S_FROZEN:
-        raise ProvenanceError("the Phase S top_k, source depth or rrf_k grid differs from approval")
-    effective = {name: getattr(settings, name, None) for name in PHASE_S_SETTINGS}
+    if phase == "S":
+        harness = {"top_k": TOP_K, "source_depth": SOURCE_DEPTH, "rrf_k_grid": list(RRF_K_GRID)}
+        declared = {key: PREDECLARED["S"][key] for key in PHASE_S_FROZEN}
+        if harness != PHASE_S_FROZEN or declared != PHASE_S_FROZEN:
+            raise ProvenanceError(
+                "the Phase S top_k, source depth or rrf_k grid differs from approval"
+            )
+        effective = _approved_values("S", settings, PHASE_S_SETTINGS)
+        if rrf_k_status != PHASE_S_RRF_K_STATUS:
+            raise ProvenanceError(
+                f"RRF_K_STATUS is {rrf_k_status!r}; Phase S runs only before selection "
+                f"({PHASE_S_RRF_K_STATUS!r})"
+            )
+        return {**effective, "rrf_k_status": rrf_k_status}
+    if phase == "CL":
+        declared = PREDECLARED["CL"]
+        harness = {
+            "top_k": TOP_K,
+            **{key: declared[key] for key in PHASE_CL_FROZEN if key != "top_k"},
+            "endpoint_schedule": {str(r): list(o) for r, o in ENDPOINT_SCHEDULE.items()},
+        }
+        if harness != PHASE_CL_FROZEN or {k: declared[k] for k in PHASE_CL_FROZEN} != (
+            PHASE_CL_FROZEN
+        ):
+            raise ProvenanceError(
+                "the Phase CL top_k, runs, sampling or endpoint rotation differs from approval"
+            )
+        effective = _approved_values("CL", settings, PHASE_CL_SETTINGS)
+        if rrf_k_status != PHASE_CL_RRF_K_STATUS:
+            raise ProvenanceError(
+                f"RRF_K_STATUS is {rrf_k_status!r}; Phase CL runs only at the adopted runtime "
+                f"({PHASE_CL_RRF_K_STATUS!r})"
+            )
+        return {**effective, "rrf_k_status": rrf_k_status}
+    raise BenchmarkError(f"unknown phase {phase!r}")
+
+
+def _approved_values(phase: str, settings, approved: dict[str, int]) -> dict:
+    effective = {name: getattr(settings, name, None) for name in approved}
     differing = sorted(
-        f"{name}={value!r} (approved {PHASE_S_SETTINGS[name]})"
+        f"{name}={value!r} (approved {approved[name]})"
         for name, value in effective.items()
-        if type(value) is not int or value != PHASE_S_SETTINGS[name]
+        if type(value) is not int or value != approved[name]
     )
     if differing:
-        raise ProvenanceError("Phase S requires the approved settings: " + ", ".join(differing))
-    if rrf_k_status != PHASE_S_RRF_K_STATUS:
         raise ProvenanceError(
-            f"RRF_K_STATUS is {rrf_k_status!r}; Phase S runs only before selection "
-            f"({PHASE_S_RRF_K_STATUS!r})"
+            f"Phase {phase} requires the approved settings: " + ", ".join(differing)
         )
-    return {**effective, "rrf_k_status": rrf_k_status}
+    return effective
+
+
+def pinned_model_identity() -> dict:
+    """The model identity every header must record: the pinned default spec, manifest verified."""
+    from ecommerce_search.embeddings.spec import DEFAULT_EMBEDDING_MODEL_ID, EMBEDDING_MODELS
+
+    return check_model(Path(), EMBEDDING_MODELS[DEFAULT_EMBEDDING_MODEL_ID], lambda *_: [])
+
+
+def header_settings(phase: str, fixed: dict) -> dict:
+    """Phase S headers keep their historical shape; Phase CL also records RRF_K_STATUS."""
+    keys = ("search_rrf_k", "search_candidate_k", "search_lexical_k", "search_dense_k")
+    out = {key: fixed[key] for key in keys}
+    if phase == "CL":
+        out["rrf_k_status"] = fixed["rrf_k_status"]
+    return out
+
+
+def check_phase_header(header: dict) -> list[str]:
+    """A header must carry its own phase's pinned commit, settings, id and model identity, so an
+    S artifact cannot pass as CL (or the reverse) and a changed runtime pin is refused."""
+    phase = header.get("protocol", {}).get("phase")
+    if phase not in PHASE_COMMITS:
+        return [f"unknown protocol phase {phase!r}"]
+    problems = []
+    experiment_id = header.get("experiment_id") or ""
+    if not EXPERIMENT_ID_RE.fullmatch(experiment_id) or not experiment_id.startswith(
+        f"hybrid-m5-{phase.lower()}-"
+    ):
+        problems.append(f"experiment id is not a Phase {phase} harness id")
+    provenance = header.get("provenance") or {}
+    if provenance.get("pinned_commit") != PHASE_COMMITS[phase]:
+        problems.append(f"header pinned commit is not the Phase {phase} commit")
+    if provenance.get("guarded") != list(GUARDED_PATHS):
+        problems.append("header guarded paths differ from the protected runtime paths")
+    if not re.fullmatch(r"[0-9a-f]{40}", str(provenance.get("harness_head"))):
+        problems.append("header harness HEAD is missing or not a commit id")
+    approved, status = (
+        (PHASE_S_SETTINGS, PHASE_S_RRF_K_STATUS)
+        if phase == "S"
+        else (PHASE_CL_SETTINGS, PHASE_CL_RRF_K_STATUS)
+    )
+    if header.get("settings") != header_settings(phase, {**approved, "rrf_k_status": status}):
+        problems.append(f"header settings differ from the approved Phase {phase} settings")
+    if header.get("model") != pinned_model_identity():
+        problems.append("header model identity differs from the pinned model")
+    return problems
 
 
 def preflight(
@@ -1093,10 +1190,16 @@ def verify_artifacts(json_path: Path, expected_protocol: dict | None = None) -> 
     expected = expected_protocol or PREDECLARED.get(phase)
     if header.get("protocol") != expected:
         problems.append("the protocol differs from the predeclared protocol")
+    problems += check_phase_header(header)
     try:
         again = json.loads(json.dumps(derive(header, records)))
     except (BenchmarkError, KeyError, TypeError, ValueError) as exc:
         return [*problems, f"raw records are incomplete or inconsistent: {exc}"]
+    if phase == "CL" and again["hybrid_fusion"] != {
+        "rrf_k": PHASE_CL_SETTINGS["search_rrf_k"],
+        "rrf_k_status": PHASE_CL_RRF_K_STATUS,
+    }:
+        problems.append("hybrid responses report a fusion rrf_k or status other than approved")
     if again != summary["derived"]:
         problems.append(
             "derived summary (scores, overlaps, latency or decision) does not recompute"
@@ -1517,12 +1620,7 @@ def parent_main(phase: str) -> int:  # pragma: no cover - runs the benchmark
         "metric_definitions": METRIC_DEFINITIONS,
         "protocol_identity": identity,
         "protocol": protocol,
-        "settings": {
-            "search_rrf_k": settings.search_rrf_k,
-            "search_candidate_k": settings.search_candidate_k,
-            "search_lexical_k": settings.search_lexical_k,
-            "search_dense_k": settings.search_dense_k,
-        },
+        "settings": header_settings(phase, checked["settings"]),
         "environment": server_environment(settings),
     }
     records: list[dict] = []
