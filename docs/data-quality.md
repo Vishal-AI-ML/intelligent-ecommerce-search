@@ -1,6 +1,6 @@
 # Data Quality and Dataset Strategy
 
-- Status: Milestone 0 design; Milestone 2 decisions recorded in §2.5, §3.1 and §5.1; Milestone 3 activated check 10 for database audits (§3.1)
+- Status: Milestone 0 design; Milestone 2 decisions recorded in §2.5, §3.1 and §5.1; Milestone 3 activated check 10 for database audits (§3.1); Milestone 4 added the dense-embedding check (§3.1) and clarified embedding regeneration (§7)
 - Date: 2026-09-30
 - Related: `docs/spec.md`, `docs/architecture.md`
 
@@ -198,6 +198,20 @@ set would make ingestion refuse to re-ingest existing dataset versions (an M2-te
 Structural separation is also covered by `schema_no_label_fields` and
 `evaluation_label_fields`.
 
+**Milestone 4: `dense_embedding_consistency` (database audits only).** Embedding text is built
+from a closed whitelist of validated catalog fields (`embeddings/text.py`; a unit test checks the
+whitelist against the label blocklist, and the corpus digest is pinned per
+`EMBEDDING_TEXT_VERSION`). A separate check, so check 10 keeps its Milestone 3 meaning, audits
+`product_embeddings`: **warnings** for a missing embedding, a stale model or revision, a stale
+embedding-text version, a stale configuration hash and a source-content hash that no longer
+matches the product (an operational state healed by `embed`); **errors** for an embedding-text
+hash that differs from the whitelisted text while the row claims the current configuration and
+content, a dimension or normalization mismatch, and a zero, non-finite or non-unit vector.
+Database reports carry a separate `dense_index` section (model, revision, dimension,
+normalization, text version, configuration hash, distance, `vector_index: none (exact scan)` and
+the counts); file reports and databases below revision `0004` state that it is not applicable.
+`RULES_VERSION` stays `"1"` for the same reason as in Milestone 3.
+
 ## 4. Raw data preservation
 
 - Raw input is stored exactly as received, separately from normalized
@@ -318,6 +332,21 @@ Catalog version, dataset version, golden-set version and normalization-rule
 version are recorded in every experiment. Changing any of them requires
 regenerating dependent artifacts (such as embeddings) and rerunning
 evaluation.
+
+**Milestone 4 clarification for embeddings.** Experiments always record the exact dataset
+identity (dataset id, dataset version, checksum, record count, transform, taxonomy and rules
+versions) and the embedding identity (model id and revision, configuration hash, embedding-text
+version and corpus digest); database audits report the dataset id, version and checksum.
+Embeddings themselves are **content-addressed**: each row stores the `content_sha256` of the
+product content it was built from (`source_content_sha256`) plus its model, revision,
+configuration hash and embedding-text version. An embedding is regenerated when the effective
+product content changes (including any normalization, transform or taxonomy change that alters
+it) or when the model, revision, embedding configuration, normalization, dimension or
+embedding-text version changes. A dataset-version-only change whose effective product content is
+identical does not require re-encoding the same text. Stale embeddings are excluded from dense
+retrieval until `embed` regenerates them. `source_content_sha256` is a content hash, not a
+catalog or dataset version; the dataset version that introduced a current row's content is the
+one recorded on its product (`products.dataset_pk`).
 
 ## 8. Acceptance criteria (for Milestone 2 onward)
 

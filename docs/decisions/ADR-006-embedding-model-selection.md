@@ -21,7 +21,7 @@ Refines ADR-004, which fixed the strategy and deferred the model choice to Miles
 | Query prefix / document prefix | none / none |
 | Maximum sequence length | 256 tokens |
 | Distance | cosine |
-| Index | exact scan initially; no persistent ANN index |
+| Index | exact scan; no persistent ANN index (confirmed by the Milestone 4 benchmark below) |
 | Embedding text | `EMBEDDING_TEXT_VERSION = "1"` (`src/ecommerce_search/embeddings/text.py`) |
 | Configuration hash | `6d5cfc238e11c60053e8227b5206d295ef4f06b3fcfbd8d359c2bbb96efb743b` (`EmbeddingModelSpec.config_sha256()`) |
 
@@ -237,12 +237,49 @@ unchanged, from the reviewed Phase A commit, and **independently reconfirmed Min
 These figures are taken from the recorded artifact. They do not replace the first experiment's
 measurements above, which remain the selection evidence.
 
+## Milestone 4 benchmark: exact scan versus HNSW (2026-10-02)
+
+The production `/search/dense` path was benchmarked after Phase B with a predeclared protocol
+and decision rule (`scripts/benchmark_dense.py`; full tables in `docs/search-dense-m4.md` §4).
+
+- **Experiment ID:** `dense-m4-20261002T060655Z-e3c7b7dc` (harness commit
+  `5c388cd2d1a523537c8a33d37c79490a911957b5`, clean tree; production code identical to
+  `0ab972e1cc45dd489b262a39962a4c6debea5c43`).
+- **Artifact SHA-256** (git-ignored, not committed): `.json`
+  `19e7ed1543303d173b003c029e08ff0ffbbfef8689c22383e840c8261ade3628`, `.md`
+  `9610799b2706ef0dc1280a328b04e3ad8b2a90267407d3280c0d2aac3ab87ed2`, `.samples.jsonl`
+  `805414a699aee1f4d07f3d8b751115bb9c2a412f46c9594cd68555a009b8f70c`. `--verify` and an
+  independent recomputation matched with zero mismatches.
+- **Catalog:** `synthetic-seed` version 1, checksum
+  `2c1c5fa43eec5f7346df40c17e57c07f6594ab1833c5d9d4c862e6d2e8bbbbc8`, 240 products, 240
+  embeddings per run, three runs on fresh scratch databases.
+- **Production path:** B1 median `request_ms` 19.976 ms over all samples; B2 exact retrieval
+  p50 at k=10 of 1.975 / 2.144 / 2.204 ms. Every production plan was a sequential scan of
+  `product_embeddings`.
+- **Exact versus HNSW** (experimental ANN-compatible SQL, not production latency): C1 (no index)
+  p50 at k=10 of 1.33 / 1.596 / 1.486 ms against C2 (temporary HNSW, m 16, ef_construction 64,
+  ef_search 100) 1.586 / 1.534 / 1.701 ms. Savings −0.256 / +0.062 / −0.215 ms against a
+  run-to-run spread of 0.266 ms. Tie-aware recall 1.0 everywhere. The planner chose the HNSW
+  index in 0 of 72 natural plans. Index build 167.8–596.2 ms, 499,712 bytes.
+- **Rule outcome:** criteria 1 (latency in every run), 2 (at least 5 % of end-to-end latency)
+  and 4 (natural plan uses HNSW) failed; criterion 3 (recall) passed. **Retain the exact scan.**
+
+An earlier attempt, `dense-m4-20261002T053443Z-44107e19`, is invalid (the host entered Modern
+Standby during run 2). Its artifacts were deleted and it is not evidence.
+
+**Confirmed for Milestone 4:** MiniLM at the pinned revision, with an exact cosine scan and no
+persistent ANN index, for the current 240-product synthetic catalog. This is a latency and plan
+measurement, not a relevance result. **ANN indexing must be reconsidered when the catalog grows
+materially** (re-run the benchmark; do not extrapolate from 240 rows).
+
 ## Follow-up
 
 1. Done: the selection experiment was rerun from the committed tree and confirmed MiniLM (see
    above).
-2. Revisit at Milestone 10, when Golden Dataset evaluation is available, or if the catalog
-   outgrows the 256-token limit.
+2. Done: the exact-versus-HNSW benchmark retained the exact scan at 240 rows (see above).
+3. Revisit at Milestone 10, when Golden Dataset evaluation is available, or if the catalog
+   outgrows the 256-token limit. Re-run the index benchmark at materially larger catalog
+   sizes.
 
 ## References
 

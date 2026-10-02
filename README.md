@@ -21,7 +21,14 @@ Milestone 3 (PostgreSQL lexical baseline, **V0**): **implemented.** A derived
 `product_search_documents` table (migration `0003`, weighted `tsvector` + GIN index), document
 building inside ingestion, an explicit `search reindex` backfill command, a lexical retrieval
 service and `GET`/`POST /search` (see "Lexical search (Milestone 3)" below and
-`docs/search-v0-baseline.md`). There is no embedding, vector or model code yet.
+`docs/search-v0-baseline.md`).
+
+Milestone 4 (dense semantic retrieval): **implemented.** Local embeddings with the pinned
+`sentence-transformers/all-MiniLM-L6-v2` model (ADR-006), a `product_embeddings` pgvector table
+(migration `0004`, `vector(384)`), explicit `embed` / `embed-status` commands and
+`GET`/`POST /search/dense` (see "Dense search (Milestone 4)" below and
+`docs/search-dense-m4.md`). A measured benchmark kept the exact scan: no persistent ANN index at
+240 products. There is no hybrid retrieval (RRF) yet; that is Milestone 5.
 
 ## Prerequisites
 
@@ -226,6 +233,66 @@ of results in the response, not the number of database matches. `/health` is unc
 **Warning: downgrading revision `0003` drops the derived search table** (rebuild it with
 `reindex`); downgrading `0002` still drops all catalog data.
 
+## Dense search (Milestone 4)
+
+Dense-only semantic retrieval (`search_version = "dense_only"`; hybrid V1 is Milestone 5) over a
+**derived** embedding table. No relevance or quality claim is made: there is no Golden Dataset
+yet, and the catalog is synthetic. Design, freshness rules, API behaviour, the benchmark and the
+Docker verification are in `docs/search-dense-m4.md`; the model decision is ADR-006.
+
+* **Model.** `sentence-transformers/all-MiniLM-L6-v2` at immutable revision
+  `1110a243fdf4706b3f48f1d95db1a4f5529b4d41` (384 dimensions, normalized, maximum 256 tokens,
+  CPU). It is pinned in code; settings can only select a reviewed entry.
+* **Installing torch.** `torch` comes from the official CPU-only wheel index on every platform
+  (`[tool.uv.sources]` in `pyproject.toml`), so the environment is large (about 0.9 GB) but has no
+  CUDA packages.
+
+Required sequence (each step is explicit; none runs automatically):
+
+```bash
+# once, the ONLY networked command: weights go to the git-ignored models/ directory
+uv run python -m ecommerce_search.search model-fetch --model-id sentence-transformers/all-MiniLM-L6-v2 --revision 1110a243fdf4706b3f48f1d95db1a4f5529b4d41
+uv run alembic upgrade head                                          # revision 0004 (schema only)
+uv run python -m ecommerce_search.catalog ingest --database <db>     # catalog + lexical documents
+uv run python -m ecommerce_search.search embed --database <db>       # all missing/stale embeddings
+uv run python -m ecommerce_search.search embed-status --database <db> --require-current
+```
+
+* **Generation.** `embed` plans, encodes (refusing any text over the 256-token limit; nothing is
+  truncated) and writes in one transaction; any failure writes nothing, current rows are left
+  untouched, `--all` re-embeds everything. Ingestion never loads the model.
+* **Freshness.** Embeddings are content-addressed: a row is stale when the product's content, the
+  model, its revision, the embedding configuration or the embedding-text version changes. Stale
+  and missing rows are **excluded** from dense results until `embed` heals them, so results may be
+  incomplete; `embed-status` (or `--verify-vectors` to re-encode and compare) and
+  `catalog check --database` (check `dense_embedding_consistency` and the `dense_index` section)
+  report the state. Dataset identity is reported by `catalog check --database`.
+* **Search.** Exact cosine distance in pgvector, ordered by `dense_score` (cosine similarity,
+  not a probability) then `product_id`. There is no similarity threshold, so every query returns
+  up to `top_k` nearest products. `top_k` is 1..`SEARCH_DENSE_K` (default 50); the same text
+  validation as `/search` applies; a query without any letter or digit returns no results.
+* **Missing model.** If the snapshot is absent or cannot load, `/search/dense` returns the fixed
+  `503 {"detail": "search unavailable"}` (the log names only a reason code such as
+  `snapshot_missing`); `/search` and `/health` keep working.
+
+```bash
+curl "http://127.0.0.1:8000/search/dense?q=noise+cancelling+headphones&top_k=5"
+curl -X POST http://127.0.0.1:8000/search/dense -H "Content-Type: application/json" -d '{"query": "running shoes", "top_k": 5}'
+```
+
+* **Docker.** Model weights are never copied into the image (`.dockerignore` excludes
+  `models/`). Compose mounts the repository `models/` directory **read-only** into the `api`
+  service only (`./models:/models:ro`, `EMBEDDING_MODELS_DIR=/models`); `db` and `migrate` get
+  neither the mount nor embedding settings. Without a fetched snapshot, dense search returns the
+  fixed 503 inside the container while lexical search and `/health` still work. The image is
+  about 2 GB because of torch (CPU).
+* **Limitations.** 240 synthetic products; English-only model (Hinglish is not understood until
+  query understanding in Milestone 6); the first dense request in a process pays the model load
+  (several seconds). The exact-scan decision applies only at the current catalog size.
+
+**Warning: downgrading revision `0004` drops the derived embedding table** (regenerate it with
+`embed`). `alembic downgrade base` still drops the pgvector extension and everything before it.
+
 ## `GET /health`
 
 Readiness-oriented. Returns `200` with `status: "ok"` when PostgreSQL is
@@ -240,17 +307,20 @@ stack traces).
 uv lock --check
 uv run ruff check .
 uv run ruff format --check .
-uv run pytest -m "not integration"     # unit + API tests, no Docker, no .env, no password
+uv run pytest -m "not integration and not real_model"   # unit + API tests: no Docker, .env or model
 docker compose up -d db
 uv run alembic upgrade head
-uv run pytest -m integration           # needs the compose database running (scratch DBs only)
+uv run pytest -m "integration and not real_model"       # needs the compose database (scratch DBs only)
+uv run pytest -m real_model    # offline smoke tests with the fetched MiniLM snapshot (and the database)
 docker compose config -q
 ```
 
 Unit tests are hermetic: they never read `.env` or ambient `POSTGRES_*` settings, and a
 regression test runs the whole unit suite with a blank password.
 Integration tests fail (they are not skipped) if the database is not running.
-They create and drop throwaway databases and never touch the development database.
+They create and drop throwaway databases and never touch the development database. The
+`real_model` tests also fail (they are not skipped) if the MiniLM snapshot is missing; they never
+use the network. Every other test uses a deterministic fake embedder.
 
 ## Versions
 

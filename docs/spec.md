@@ -134,6 +134,12 @@ measured against human-reviewed evaluation data.
   brands, model names, exact terms and specifications, with suitable indexes.
 - FR-RET-2: Dense retrieval with a configurable local
   sentence-transformers-compatible embedding model stored in pgvector.
+- FR-RET-2 status (Milestone 4): **implemented** as dense-only retrieval (`GET`/`POST
+  /search/dense`, `search_version = "dense_only"`) with `sentence-transformers/all-MiniLM-L6-v2`
+  at a pinned revision (ADR-006), a `vector(384)` column and an exact cosine-distance scan. Only
+  embeddings built from current product content with the active model and configuration are
+  used. No persistent ANN index exists: a measured benchmark found no benefit at 240 products
+  (`docs/search-dense-m4.md`). Fusion with lexical results is FR-RET-3 (Milestone 5).
 - FR-RET-3 (V1): Hybrid retrieval that fuses lexical and dense candidate lists
   with Reciprocal Rank Fusion. Initial configurable values: `lexical_k=50`,
   `dense_k=50`, `candidate_k=50`. The RRF constant `rrf_k` is configurable,
@@ -161,6 +167,13 @@ measured against human-reviewed evaluation data.
   V0) and `latency_ms` (`lexical_ms`, `total_ms`). Decision provider, reranker state and parsed
   query are **not** returned yet; they are added when those components exist (additive, no
   placeholders).
+- FR-API-2 status (Milestone 4): `GET`/`POST /search/dense` responses carry `search_version`
+  (`dense_only`), `embedding_model_id`, `embedding_model_revision`, `embedding_dimension`,
+  `embedding_text_version`, `distance_metric` (`cosine`), `top_k`, `result_count`,
+  `applied_filters` (always empty) and `latency_ms` (`model_load_ms`, `query_embedding_ms`,
+  `vector_ms`, `total_ms`). `dense_score` is cosine similarity, not a probability. A missing or
+  unloadable model returns a fixed `503 {"detail": "search unavailable"}`; `/search` and
+  `/health` are unchanged.
 - FR-API-3: Listing endpoints (`POST /listings/analyze`,
   `POST /listings/normalize`, `GET /reviews/pending`,
   `POST /reviews/{review_id}/decision`) are deferred to their milestones.
@@ -402,6 +415,11 @@ reporting. Split sizes and results are not decided in Milestone 0.
 ## 10. Latency
 
 - No universal latency target is promised in this specification.
+- Milestone 4 adds two dense stage timings to the list below: `query_embedding_ms` (query
+  token check and encoding) and `model_load_ms` (reported only by the request that loads the
+  model). `serialization_ms` is measured by the benchmark harnesses (timing `model_dump_json()`
+  separately), not reported by the API; a derived `request_ms - app_total_ms` overhead is never
+  called serialization.
 - Measured stages: `query_understanding_ms`, `jev_decision_ms`, `lexical_ms`,
   `vector_ms`, `filtering_ms`, `rrf_ms`, `reranking_ms`, `serialization_ms`,
   `total_ms`.
@@ -482,7 +500,10 @@ human review, and evaluation is human-reviewed.
    selects a provisional value, marked provisional. Milestone 10 re-evaluates
    on the human-reviewed Golden Dataset (ADR-002, section 9.1).
 3. **Embedding and reranker models:** selected in Milestones 4 and 8 from
-   measurement (ADR-004).
+   measurement (ADR-004). **Milestone 4:** embedding model decided in ADR-006
+   (`sentence-transformers/all-MiniLM-L6-v2` at revision
+   `1110a243fdf4706b3f48f1d95db1a4f5529b4d41`), provisional until the Golden Dataset evaluation
+   in Milestone 10. The reranker remains open until Milestone 8.
 4. **Confidence thresholds:** experimental. Selected from human-reviewed data
    in Milestone 12. Until then model-derived decisions cannot be hard
    filters (section 7).
