@@ -1,6 +1,7 @@
 """scripts/benchmark_dense.py: pure logic, guards, derivation and cleanup (no DB, no model)."""
 
 import contextlib
+import hashlib
 import importlib.util
 import json
 import socket
@@ -9,6 +10,8 @@ import sys
 from pathlib import Path
 
 import pytest
+
+from ecommerce_search.embeddings.text import EMBEDDING_TEXT_VERSION
 
 ROOT = Path(__file__).resolve().parents[3]
 
@@ -317,6 +320,16 @@ def test_natural_plan_must_choose_hnsw_without_forcing():
 # ---- derivation, artifacts and --verify ----------------------------------------------------------
 
 SAMPLES = 2
+CATALOG_ROW = {
+    "dataset_id": "synthetic-seed",
+    "dataset_version": "1",
+    "checksum_sha256": "2c1c5fa43eec5f7346df40c17e57c07f6594ab1833c5d9d4c862e6d2e8bbbbc8",
+    "record_count": 240,
+    "transform_version": "1",
+    "taxonomy_version": "1",
+    "rules_version": "1",
+}
+CORPUS_DIGEST = bench.embedding_corpus_digest()
 PRODUCTS = [f"P{i:03d}" for i in range(80)]  # enough for query index 11 at k=50
 
 
@@ -331,8 +344,23 @@ def make_records(c1_ms=10.0, c2_ms=9.0, request_ms=50.0, natural=False, forced=T
             seq += 1
 
         order = list(bench.phase_order(run))
-        emit({"record": "run", "phase_order": order, "pgvector": "0.8.6"})
-        emit({"record": "generation", "products": 240, "first_embed_ms": 5000.0})
+        emit(
+            {
+                "record": "run",
+                "phase_order": order,
+                "pgvector": "0.8.6",
+                "catalog_datasets": [dict(CATALOG_ROW)],
+                "product_count": 240,
+            }
+        )
+        emit(
+            {
+                "record": "generation",
+                "products": 240,
+                "first_embed_ms": 5000.0,
+                "embedding_rows": 240,
+            }
+        )
         emit({"record": "index_check", "indexes": ["pk_product_embeddings"], "ann_indexes": 0})
         emit({"record": "index", "build_ms": 12.0, "size_bytes": 1024})
         for suite in ("B1", "B2", "C1", "C2"):
@@ -349,6 +377,7 @@ def make_records(c1_ms=10.0, c2_ms=9.0, request_ms=50.0, natural=False, forced=T
                                     "app_total_ms": request_ms - 5 + i,
                                     "query_embedding_ms": 8.0,
                                     "vector_ms": 2.0,
+                                    "serialization_ms": 0.25 + i,
                                 },
                                 "B2": {"vector_ms": 2.0 + i},
                                 "C1": {"ann_sql_ms": c1_ms + 0.0 * i},
@@ -413,6 +442,10 @@ def make_header():
         "model": {"model_id": FakeSpec.model_id, "revision": FakeSpec.revision, "dimension": 384},
         "queries": bench.query_set_identity(),
         "protocol": {"runs": 3, "samples_per_query": SAMPLES, "k_values": [10, 50]},
+        "catalog": bench.committed_catalog_identity(),
+        "embedding_text_version": EMBEDDING_TEXT_VERSION,
+        "embedding_corpus_digest": CORPUS_DIGEST,
+        "not_applicable": dict(bench.NOT_APPLICABLE),
     }
 
 
@@ -721,3 +754,237 @@ def test_every_raw_sample_is_covered_by_recomputation(tmp_path, phase):
         json.dumps(summary), encoding="utf-8"
     )  # hash forged: recompute must catch it
     assert any("does not recompute" in p for p in bench.verify_artifacts(json_path))
+
+
+# ---- serialization_ms (direct, M3 convention) and request_overhead_ms (derived) ------------------
+
+
+def _forge_hash(json_path, body):
+    summary = json.loads(json_path.read_text(encoding="utf-8"))
+    summary["raw_samples"]["sha256"] = hashlib.sha256(body.encode("utf-8")).hexdigest()
+    return summary
+
+
+def test_serialization_is_a_b1_metric_for_cold_and_timed_samples():
+    assert "serialization_ms" in bench.SUITES["B1"]["metrics"]
+    derived = bench.derive(make_header(), make_records())
+    b1 = derived["runs"]["1"]["suites"]["B1@10"]
+    for query in QUERIES:
+        assert b1["per_query"][query]["cold"]["serialization_ms"] == 0.25
+        timed = b1["per_query"][query]["timed"]["serialization_ms"]
+        assert {"p50", "p95", "p99", "max"} <= set(timed) and timed["n"] == SAMPLES
+    overall = b1["overall"]
+    assert overall["serialization_ms"]["p50"] == 0.25
+    assert overall["serialization_ms"]["p99"] == 1.25
+    assert overall["request_overhead_ms"]["p50"] == 5.0  # distinct field, distinct value
+    assert overall["serialization_ms"] != overall["request_overhead_ms"]
+
+
+def test_metric_definitions_are_truthful_and_distinct():
+    serialization = bench.METRIC_DEFINITIONS["serialization_ms"]
+    overhead = bench.METRIC_DEFINITIONS["request_overhead_ms"]
+    assert "model_dump_json()" in serialization and "model_validate" in serialization
+    assert "never part of request_ms" in serialization
+    assert "request_ms - app_total_ms (derived)" in overhead
+    assert "not a direct serialization measurement" in overhead
+
+
+def test_serialization_is_timed_after_the_request_interval_in_the_run_code():
+    source = (ROOT / "scripts" / "benchmark_dense.py").read_text(encoding="utf-8")
+    body = source.split("def child_main")[1]
+    request_end = body.index("request_ms = (time.perf_counter() - started) * 1000")
+    validate = body.index("DenseSearchResponse.model_validate(body)")
+    dump = body.index("parsed.model_dump_json()")
+    assert request_end < validate < dump
+
+
+def test_markdown_reports_both_metrics_with_their_definitions(tmp_path):
+    json_path = write(tmp_path)
+    markdown = json_path.with_name("dense-test.md").read_text(encoding="utf-8")
+    assert "| B1@10 | serialization_ms |" in markdown
+    assert "| B1@10 | request_overhead_ms |" in markdown
+    assert f"- `serialization_ms`: {bench.SERIALIZATION_NOTE}" in markdown
+    assert f"- `request_overhead_ms`: {bench.DERIVED_METRIC_NOTE}" in markdown
+
+
+@pytest.mark.parametrize("phase", ["cold", "timed"])
+def test_forged_hash_serialization_tampering_is_detected(tmp_path, phase):
+    json_path = write(tmp_path)
+    raw = json_path.with_name("dense-test.samples.jsonl")
+    lines = raw.read_text(encoding="utf-8").splitlines()
+    index = next(
+        i for i, line in enumerate(lines) if f'"phase":"{phase}"' in line and '"suite":"B1"' in line
+    )
+    record = json.loads(lines[index])
+    record["serialization_ms"] = 99.0
+    lines[index] = bench.dumps(record)
+    body = "\n".join(lines) + "\n"
+    raw.write_text(body, encoding="utf-8")
+    json_path.write_text(json.dumps(_forge_hash(json_path, body)), encoding="utf-8")
+    assert any("does not recompute" in p for p in bench.verify_artifacts(json_path))
+
+
+def test_older_samples_without_serialization_are_refused():
+    records = make_records()
+    for record in records:
+        if record.get("suite") == "B1":
+            record.pop("serialization_ms", None)
+    with pytest.raises(bench.BenchmarkError, match="lack metrics"):
+        bench.derive(make_header(), records)
+
+
+# ---- experiment identity ---------------------------------------------------------------------
+
+
+def test_header_catalog_identity_comes_from_the_committed_provenance():
+    identity = bench.committed_catalog_identity()
+    assert {name: identity[name] for name in bench.CATALOG_FIELDS} == CATALOG_ROW
+    provenance_path = ROOT / "data" / "seed" / "catalog_seed_v1.provenance.json"
+    provenance = json.loads(provenance_path.read_text(encoding="utf-8"))
+    for name in ("dataset_id", "dataset_version", "checksum_sha256", "record_count"):
+        assert identity[name] == provenance[name]
+    assert identity["sources"]["rules_version"].endswith("parameters.RULES_VERSION")
+    # checksum, record count, dataset version and catalog identity are distinct fields
+    assert identity["checksum_sha256"] != identity["dataset_version"]
+    assert isinstance(identity["record_count"], int)
+
+
+def test_corpus_digest_matches_the_pinned_builder_digest():
+    spec = importlib.util.spec_from_file_location(
+        "corpus_digest_test", ROOT / "tests" / "unit" / "search" / "test_embedding_corpus_digest.py"
+    )
+    pinned = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(pinned)
+    expected = pinned.EMBEDDING_CORPUS_SHA256_BY_VERSION[EMBEDDING_TEXT_VERSION]
+    assert bench.embedding_corpus_digest() == expected == CORPUS_DIGEST
+
+
+def test_header_carries_every_required_identity_field():
+    header = make_header()
+    bench.check_header_identity(header)
+    assert header["embedding_text_version"] == EMBEDDING_TEXT_VERSION
+
+
+@pytest.mark.parametrize(
+    "key", ["catalog", "embedding_text_version", "embedding_corpus_digest", "not_applicable"]
+)
+def test_older_headers_missing_identity_are_refused(key):
+    header = make_header()
+    header.pop(key)
+    with pytest.raises(bench.BenchmarkError, match="missing"):
+        bench.derive(header, make_records())
+
+
+@pytest.mark.parametrize("field", list(CATALOG_ROW))
+def test_header_catalog_mismatch_is_refused(field):
+    header = make_header()
+    header["catalog"][field] = 999 if field == "record_count" else "different"
+    with pytest.raises(bench.BenchmarkError, match="catalog identity"):
+        bench.derive(header, make_records())
+
+
+@pytest.mark.parametrize(
+    ("key", "value", "message"),
+    [
+        ("embedding_text_version", "2", "embedding_text_version"),
+        ("embedding_corpus_digest", "0" * 64, "corpus digest"),
+    ],
+)
+def test_text_version_and_corpus_digest_mismatch_is_refused(key, value, message):
+    header = make_header()
+    header[key] = value
+    with pytest.raises(bench.BenchmarkError, match=message):
+        bench.derive(header, make_records())
+
+
+@pytest.mark.parametrize("field", list(CATALOG_ROW))
+@pytest.mark.parametrize("run", [1, 2, 3])
+def test_run_catalog_identity_must_match_the_header(field, run):
+    records = make_records()
+    info = next(r for r in records if r["record"] == "run" and r["run"] == run)
+    info["catalog_datasets"][0][field] = 999 if field == "record_count" else "different"
+    with pytest.raises(bench.BenchmarkError, match="catalog_datasets identity"):
+        bench.derive(make_header(), records)
+
+
+@pytest.mark.parametrize("mutation", ["empty", "two_rows", "absent"])
+def test_run_catalog_rows_must_be_exactly_one_matching_dataset(mutation):
+    records = make_records()
+    info = next(r for r in records if r["record"] == "run" and r["run"] == 2)
+    if mutation == "empty":
+        info["catalog_datasets"] = []
+    elif mutation == "two_rows":
+        info["catalog_datasets"] = [dict(CATALOG_ROW), dict(CATALOG_ROW)]
+    else:
+        info.pop("catalog_datasets")
+    with pytest.raises(bench.BenchmarkError, match="catalog_datasets identity"):
+        bench.derive(make_header(), records)
+
+
+@pytest.mark.parametrize(
+    ("record_type", "field", "message"),
+    [("run", "product_count", "product count"), ("generation", "embedding_rows", "embedding row")],
+)
+def test_row_counts_must_remain_240(record_type, field, message):
+    records = make_records()
+    target = next(r for r in records if r["record"] == record_type and r["run"] == 3)
+    target[field] = 239
+    with pytest.raises(bench.BenchmarkError, match=message):
+        bench.derive(make_header(), records)
+
+
+# ---- not applicable metadata ---------------------------------------------------------------------
+
+
+def test_not_applicable_block_has_every_field_with_an_explicit_reason():
+    assert set(bench.NOT_APPLICABLE) == {
+        "golden_dataset_version",
+        "relevance_quality_metrics",
+        "decision_provider",
+        "policy_prompt_version",
+        "reranker",
+        "cost",
+    }
+    for reason in bench.NOT_APPLICABLE.values():
+        assert isinstance(reason, str) and reason.startswith("not applicable: ")
+        assert len(reason) > len("not applicable: ") + 20
+    assert "Milestone 9" in bench.NOT_APPLICABLE["golden_dataset_version"]
+    assert "Milestone 8" in bench.NOT_APPLICABLE["reranker"]
+
+
+@pytest.mark.parametrize("change", ["drop", "null", "reword"])
+def test_altered_not_applicable_block_is_refused(change):
+    header = make_header()
+    if change == "drop":
+        header["not_applicable"].pop("cost")
+    elif change == "null":
+        header["not_applicable"]["reranker"] = None
+    else:
+        header["not_applicable"]["decision_provider"] = "n/a"
+    with pytest.raises(bench.BenchmarkError, match="not_applicable"):
+        bench.derive(header, make_records())
+
+
+def test_markdown_reports_identity_and_not_applicable(tmp_path):
+    markdown = write(tmp_path).with_name("dense-test.md").read_text(encoding="utf-8")
+    assert "Dataset `synthetic-seed` version 1" in markdown
+    assert CATALOG_ROW["checksum_sha256"] in markdown and "record count 240" in markdown
+    assert f"Embedding text version {EMBEDDING_TEXT_VERSION}, corpus digest" in markdown
+    for name in bench.NOT_APPLICABLE:
+        assert f"- `{name}`: not applicable: " in markdown
+
+
+def test_verify_refuses_an_older_artifact_without_identity(tmp_path):
+    json_path = write(tmp_path)
+    raw = json_path.with_name("dense-test.samples.jsonl")
+    lines = raw.read_text(encoding="utf-8").splitlines()
+    header = json.loads(lines[0])
+    header.pop("embedding_corpus_digest")
+    lines[0] = bench.dumps(header)
+    body = "\n".join(lines) + "\n"
+    raw.write_text(body, encoding="utf-8")
+    summary = _forge_hash(json_path, body)
+    summary["header"].pop("embedding_corpus_digest")
+    json_path.write_text(json.dumps(summary), encoding="utf-8")
+    problems = bench.verify_artifacts(json_path)
+    assert any("incomplete or inconsistent" in p and "missing" in p for p in problems)

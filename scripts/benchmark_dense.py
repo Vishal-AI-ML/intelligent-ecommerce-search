@@ -95,7 +95,13 @@ SUITES: dict[str, dict] = {
     "B1": {
         "name": "production end-to-end GET /search/dense (top_k=10)",
         "label": "production",
-        "metrics": ("request_ms", "app_total_ms", "query_embedding_ms", "vector_ms"),
+        "metrics": (
+            "request_ms",
+            "app_total_ms",
+            "query_embedding_ms",
+            "vector_ms",
+            "serialization_ms",
+        ),
     },
     "B2": {
         "name": "production dense_search() / RETRIEVAL_SQL (exact scan)",
@@ -118,6 +124,36 @@ DERIVED_METRIC_NOTE = (
     "dependency resolution and framework response serialization inside the in-process "
     "TestClient call. It is not a direct serialization measurement and not network latency."
 )
+SERIALIZATION_NOTE = (
+    "serialization_ms (measured directly, M3 convention): the response payload is parsed with "
+    "DenseSearchResponse.model_validate(...) and DenseSearchResponse.model_dump_json() is timed "
+    "on its own, after the request_ms interval has ended, so it is never part of request_ms."
+)
+METRIC_DEFINITIONS: dict[str, str] = {
+    "request_ms": "in-process TestClient GET, ends before response.json(); not network latency",
+    "app_total_ms": "handler entry through result-model construction (API latency_ms.total_ms)",
+    "query_embedding_ms": "query token check and encoding (API latency_ms.query_embedding_ms)",
+    "vector_ms": "vector SQL and row fetch (API latency_ms.vector_ms / dense_search())",
+    "serialization_ms": SERIALIZATION_NOTE,
+    "request_overhead_ms": DERIVED_METRIC_NOTE,
+    "ann_sql_ms": "EXPERIMENTAL ANN-compatible SQL execute and fetch (not production SQL)",
+}
+
+# Experiment metadata that does not apply in Milestone 4 (explicit, never null).
+NOT_APPLICABLE: dict[str, str] = {
+    "golden_dataset_version": "not applicable: the human-reviewed Golden Dataset is created in "
+    "Milestone 9; none exists in Milestone 4",
+    "relevance_quality_metrics": "not applicable: no relevance or quality metric is computed "
+    "before the Golden Dataset (Milestones 9-10); this benchmark measures latency, "
+    "determinism and exact-vs-HNSW agreement only",
+    "decision_provider": "not applicable: no decision provider exists in Milestone 4 "
+    "(deterministic provider in Milestone 6, optional Jev in Milestones 11-12)",
+    "policy_prompt_version": "not applicable: no model policy or prompt is used in Milestone 4 "
+    "(bounded decision providers arrive in Milestones 11-15)",
+    "reranker": "not applicable: no cross-encoder reranker exists before Milestone 8",
+    "cost": "not applicable: local CPU model and local database only; no paid API or metered "
+    "service is used, so there is no per-request cost to report",
+}
 
 # Predeclared decision rule (approved before execution; never tuned after seeing results).
 MIN_RELATIVE_SAVING = 0.25
@@ -174,6 +210,71 @@ def query_set_identity(queries: Sequence[str] = QUERIES) -> dict:
         "normalized_sha256": hashlib.sha256(dumps(normalized).encode("utf-8")).hexdigest(),
         "normalized": normalized,
     }
+
+
+def embedding_corpus_digest() -> str:
+    """The pinned embedding-corpus digest of the committed seed (same canonical form as
+    tests/unit/search/test_embedding_corpus_digest.py, which pins it per text version)."""
+    from ecommerce_search.embeddings import text as et
+    from ecommerce_search.ingestion.loader import load_catalog
+
+    catalog = load_catalog(SEED)
+    semantics = {
+        "connectivity_phrases": {k.value: v for k, v in et.CONNECTIVITY_PHRASES.items()},
+        "texts": [
+            {"product_id": line.record.product_id, "text": et.build_embedding_text(line.record)}
+            for line in sorted(catalog.lines, key=lambda line: line.record.product_id)
+        ],
+    }
+    canonical = json.dumps(semantics, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
+CATALOG_FIELDS: tuple[str, ...] = (
+    "dataset_id",
+    "dataset_version",
+    "checksum_sha256",
+    "record_count",
+    "transform_version",
+    "taxonomy_version",
+    "rules_version",
+)
+
+
+def committed_catalog_identity() -> dict:
+    """Dataset identity from the committed seed provenance file (and the committed rules
+    version, which ingestion records but the provenance file does not carry)."""
+    from ecommerce_search.catalog.quality.parameters import RULES_VERSION
+
+    provenance = json.loads(PROVENANCE_FILE.read_text(encoding="utf-8"))
+    if hashlib.sha256(SEED.read_bytes()).hexdigest() != provenance["checksum_sha256"]:
+        raise BenchmarkError("the committed seed does not match its provenance checksum")
+    identity = {name: provenance[name] for name in CATALOG_FIELDS if name != "rules_version"}
+    identity["rules_version"] = RULES_VERSION
+    return {
+        **identity,
+        "sources": {
+            "rules_version": "ecommerce_search.catalog.quality.parameters.RULES_VERSION",
+            "other_fields": "data/seed/catalog_seed_v1.provenance.json",
+        },
+    }
+
+
+def check_header_identity(header: dict) -> None:
+    """Refuse artifacts whose identity is missing or differs from the committed sources."""
+    from ecommerce_search.embeddings.text import EMBEDDING_TEXT_VERSION
+
+    for key in ("catalog", "embedding_text_version", "embedding_corpus_digest", "not_applicable"):
+        if key not in header:
+            raise BenchmarkError(f"header is missing {key!r} (incomplete or older artifact)")
+    if header["catalog"] != committed_catalog_identity():
+        raise BenchmarkError("header catalog identity differs from the committed seed provenance")
+    if header["embedding_text_version"] != EMBEDDING_TEXT_VERSION:
+        raise BenchmarkError("header embedding_text_version differs from the active builder")
+    if header["embedding_corpus_digest"] != embedding_corpus_digest():
+        raise BenchmarkError("header embedding corpus digest differs from the active builder")
+    if header["not_applicable"] != NOT_APPLICABLE:
+        raise BenchmarkError("header not_applicable block is missing fields or reasons")
 
 
 def vectors_sha256(vectors: Sequence[Sequence[float]]) -> str:
@@ -362,6 +463,8 @@ def _group(records, **match):
 
 def derive(header: dict, records: list[dict]) -> dict:
     """Every reported figure, recomputed from raw records only. Raises on incomplete data."""
+    check_header_identity(header)
+    expected_catalog = {name: header["catalog"][name] for name in CATALOG_FIELDS}
     queries = header["queries"]["normalized"]
     samples, k_values = header["protocol"]["samples_per_query"], header["protocol"]["k_values"]
     runs = header["protocol"]["runs"]
@@ -376,8 +479,19 @@ def derive(header: dict, records: list[dict]) -> dict:
             raise BenchmarkError(f"run {run}: missing run or generation record")
         if tuple(run_info[0]["phase_order"]) != phase_order(run):
             raise BenchmarkError(f"run {run}: phase order differs from the declared schedule")
+        if run_info[0].get("catalog_datasets") != [expected_catalog]:
+            raise BenchmarkError(
+                f"run {run}: scratch catalog_datasets identity differs from the committed "
+                "seed provenance (dataset id, version, checksum, record count or versions)"
+            )
+        if run_info[0].get("product_count") != SEED_PRODUCTS:
+            raise BenchmarkError(f"run {run}: product count is not {SEED_PRODUCTS}")
+        if generation[0].get("embedding_rows") != SEED_PRODUCTS:
+            raise BenchmarkError(f"run {run}: embedding row count is not {SEED_PRODUCTS}")
         run_out: dict = {
             "phase_order": run_info[0]["phase_order"],
+            "catalog_datasets": run_info[0]["catalog_datasets"],
+            "product_count": run_info[0]["product_count"],
             "generation": generation[0],
             "index": _group(records, record="index", run=run),
             "vector_index_check": _group(records, record="index_check", run=run),
@@ -409,6 +523,12 @@ def derive(header: dict, records: list[dict]) -> dict:
                             f"run {run} {key} {q!r}: results changed between samples"
                         )
                     validate_ranking(result[0]["ids"], result[0]["distances"])
+                    missing = [m for s in group for m in SUITES[suite]["metrics"] if m not in s]
+                    if missing:
+                        raise BenchmarkError(
+                            f"run {run} {key} {q!r}: samples lack metrics {sorted(set(missing))} "
+                            "(incomplete or older artifact)"
+                        )
                     per_query[q] = {
                         "timed": {
                             m: summarize([s[m] for s in timed]) for m in SUITES[suite]["metrics"]
@@ -614,6 +734,7 @@ def child_main(args: argparse.Namespace) -> int:  # pragma: no cover - needs a d
     from sqlalchemy.orm import Session
 
     from ecommerce_search.api.app import create_app
+    from ecommerce_search.api.schemas import DenseSearchResponse
     from ecommerce_search.config import get_settings
     from ecommerce_search.ingestion.service import ingest_file
     from ecommerce_search.search.dense import RETRIEVAL_SQL, dense_search, retrieval_params
@@ -671,7 +792,26 @@ def child_main(args: argparse.Namespace) -> int:  # pragma: no cover - needs a d
                 pgvector = conn.execute(
                     text("SELECT extversion FROM pg_extension WHERE extname = 'vector'")
                 ).scalar_one()
-            emit({"record": "run", "phase_order": list(order), "pgvector": pgvector})
+                datasets = [
+                    dict(row)
+                    for row in conn.execute(
+                        text(
+                            "SELECT dataset_id, dataset_version, checksum_sha256, record_count, "
+                            "transform_version, taxonomy_version, rules_version "
+                            "FROM catalog_datasets ORDER BY id"
+                        )
+                    ).mappings()
+                ]
+                product_count = conn.execute(text("SELECT count(*) FROM products")).scalar_one()
+            emit(
+                {
+                    "record": "run",
+                    "phase_order": list(order),
+                    "pgvector": pgvector,
+                    "catalog_datasets": datasets,
+                    "product_count": product_count,
+                }
+            )
 
             # A: generation
             rss_start = process.memory_info().rss / 2**20
@@ -784,6 +924,12 @@ def child_main(args: argparse.Namespace) -> int:  # pragma: no cover - needs a d
                             ids = [r["product_id"] for r in body["results"]]
                             if phase == "warmup":
                                 continue
+                            # M3 convention: parse, then time model_dump_json() on its own,
+                            # outside (after) the request_ms interval.
+                            parsed = DenseSearchResponse.model_validate(body)
+                            started = time.perf_counter()
+                            parsed.model_dump_json()
+                            serialization_ms = (time.perf_counter() - started) * 1000
                             lat = body["latency_ms"]
                             sample(
                                 "B1",
@@ -797,6 +943,7 @@ def child_main(args: argparse.Namespace) -> int:  # pragma: no cover - needs a d
                                     "app_total_ms": lat["total_ms"],
                                     "query_embedding_ms": lat["query_embedding_ms"],
                                     "vector_ms": lat["vector_ms"],
+                                    "serialization_ms": serialization_ms,
                                     "model_load_ms": lat["model_load_ms"]
                                     if qi == 0 and phase == "cold"
                                     else None,
@@ -1116,7 +1263,21 @@ def markdown(summary: dict) -> str:
         f"- Model `{h['model']['model_id']}@{h['model']['revision']}`, "
         f"dimension {h['model']['dimension']}",
         f"- Queries: {h['queries']['count']} (sha256 `{h['queries']['sha256']}`)",
-        f"- {d['derived_metric_note']}",
+        f"- Dataset `{h['catalog']['dataset_id']}` version {h['catalog']['dataset_version']}, "
+        f"checksum `{h['catalog']['checksum_sha256']}`, "
+        f"record count {h['catalog']['record_count']}, "
+        f"transform/taxonomy/rules versions {h['catalog']['transform_version']}/"
+        f"{h['catalog']['taxonomy_version']}/{h['catalog']['rules_version']}",
+        f"- Embedding text version {h['embedding_text_version']}, corpus digest "
+        f"`{h['embedding_corpus_digest']}`",
+        "",
+        "## Metric definitions",
+        "",
+        *(f"- `{name}`: {text}" for name, text in METRIC_DEFINITIONS.items()),
+        "",
+        "## Not applicable in Milestone 4",
+        "",
+        *(f"- `{name}`: {reason}" for name, reason in h["not_applicable"].items()),
         "",
         "## Production reference (B1 end to end, B2 production SQL)",
         "",
@@ -1159,6 +1320,7 @@ def parent_main(args: argparse.Namespace) -> int:  # pragma: no cover - runs the
 
     from ecommerce_search.config import get_settings
     from ecommerce_search.embeddings.fetch import verify_manifest
+    from ecommerce_search.embeddings.text import EMBEDDING_TEXT_VERSION
 
     provenance = check_provenance(ROOT)
     settings = get_settings()
@@ -1172,6 +1334,11 @@ def parent_main(args: argparse.Namespace) -> int:  # pragma: no cover - runs the
         "provenance": {**provenance, "guarded": list(provenance["guarded"])},
         "source": source_fingerprint(ROOT),
         "model": model,
+        "catalog": committed_catalog_identity(),
+        "embedding_text_version": EMBEDDING_TEXT_VERSION,
+        "embedding_corpus_digest": embedding_corpus_digest(),
+        "not_applicable": NOT_APPLICABLE,
+        "metric_definitions": METRIC_DEFINITIONS,
         "queries": queries,
         "environment": environment(settings),
         "protocol": {
