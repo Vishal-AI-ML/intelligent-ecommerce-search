@@ -1,6 +1,6 @@
 # Architecture
 
-- Status: Milestone 0 design; implemented parts are marked per section (M1 foundation, M2 catalog, M3 lexical V0, M4 dense retrieval, M5 hybrid V1, M6 informational query understanding)
+- Status: Milestone 0 design; implemented parts are marked per section (M1 foundation, M2 catalog, M3 lexical V0, M4 dense retrieval, M5 hybrid V1, M6 informational query understanding, M7 structured filtering V2)
 - Date: 2026-09-30
 - Related: `docs/spec.md`, `docs/data-quality.md`, `docs/decisions/`
 
@@ -72,7 +72,9 @@ Notes:
 
 - The diagram shows the logical order. Safe filters may be pushed into the
   lexical and dense SQL queries when that is safe and beneficial. The physical
-  placement is decided and measured in Milestone 7.
+  placement is decided and measured in Milestone 7. **Milestone 7 decision:** the filters run
+  inside both source SQL statements, before ranking and `LIMIT` (section 3.1); an `EXPLAIN`
+  integration test confirms the placement. No latency was measured for it.
 - Hard-filter rule (`docs/spec.md` §7): explicit constraints parsed
   deterministically with high reliability may become hard filters. A
   model-derived decision may become a hard filter only after a confidence
@@ -140,8 +142,48 @@ normalize the query once and validate top_k (422 unchanged)
 ```
 
 The parse never reaches retrieval, fusion or ranking, and `applied_filters` stays empty. The
-Jev, confidence-gate, structured-filter and reranker stages of the section 3 pipeline are not
-implemented yet. Milestone 7 decides how parsed constraints become filters.
+Jev, confidence-gate and reranker stages of the section 3 pipeline are not implemented on
+`/search/hybrid`, and Milestone 7 did not change this flow.
+
+**Milestone 7 implemented V2** (`search_version = "v2_filtered"`, `GET`/`POST /search/filtered`,
+filter policy `fp-1`; see `docs/search-filtered-m7.md`). It is a new, additive endpoint;
+`/search`, `/search/dense` and `/search/hybrid` are unchanged. The implemented flow is:
+
+```text
+normalize the query once and validate top_k (422)
+ -> M6 deterministic parse + DecisionProvider + validation (query_understanding_ms)
+    on any failure: fixed 503 (query_understanding_failed), no model or connection checkout
+ -> fp-1 translation: derive_filters(decision) -> FilterSpec + applied/ignored (filter_translation_ms)
+    pure; on any failure: fixed 503 (filter_policy_failed), no model or connection checkout
+ -> no-searchable-text check (punctuation-only: 200, no retrieval, query_understanding still reported)
+ -> load the model if needed, check the token limit, encode the unchanged query (no DB connection held)
+ -> one REPEATABLE READ READ ONLY transaction:
+      filtered lexical SQL (LIMIT 50) + filtered dense SQL (LIMIT 50), same filter fragments
+ -> transaction ends
+ -> unchanged RRF (rrf_k = 100, provisional), keep candidate_k = 50, return the first top_k
+ -> response = V1 fields + filter_policy, applied_filters, ignored_constraints,
+    query_understanding (usage "filter_source")
+```
+
+The parse reaches retrieval only as the closed `FilterSpec`; the query text is never rewritten.
+Each active filter adds a constant `WHERE` fragment with a bound parameter to the existing V0
+lexical and M4 dense statements (spec filters are correlated `EXISTS` subqueries on
+`laptop_specs` / `phone_specs`), so filtering happens before ranking and `LIMIT`; an empty
+`FilterSpec` reproduces the V1 statements exactly. There is no post-filter, no retry without
+filters, no relaxation and no fallback to V1: zero matching products is a `200` with no
+results and the applied filters reported. Both reads share one snapshot; the transaction
+commits on success, rolls back on error and releases the connection either way, and fusion runs
+after it ends. Dense freshness is unchanged, so missing or stale embeddings only shorten the
+dense list. Failure boundaries: invalid input `422`; query-understanding, filter-policy, model
+and SQLAlchemy failures the fixed `503 {"detail": "search unavailable"}` with only a fixed
+reason code logged; any other unexpected exception the framework's generic `500`, never
+disguised as 503. The Jev, confidence-gate and reranker stages are still not implemented.
+
+No migration, index, setting or dependency was added for V2: it reads the M2 catalog columns,
+the M3 search documents and the M4 embeddings, and dense retrieval stays an exact scan. At 240
+products no index for the filter columns was added and none was measured. Revisit this (and the
+exact scan) with a measured latency benchmark when the catalog grows materially or a measurement
+shows that filtered SQL dominates request time.
 
 Evaluation order: Milestones 3 to 8 use provisional, non-authoritative smoke
 queries. Human-reviewed labels arrive in Milestone 9, and Milestone 10 re-runs
@@ -180,18 +222,19 @@ design constraints, not the DDL.
   `review_count`, `availability`, `source_type`, `created_at`, `updated_at`.
 - Frequently filtered attributes get proper typed columns (at minimum those
   used by V2 filters: `ram_gb`, `storage_gb`, `storage_type`, plus core
-  `category`, `brand`, `price`).
+  `category`, `brand`, `price`). **Milestone 7** filters exactly these typed columns plus
+  `laptop_specs.storage_interface`; no JSONB or derived column is used.
 - Other category attributes (`processor`, `gpu`, `screen_size_inches`,
   `operating_system`, `weight_kg`, `camera`, `battery_mah`, `size`, `color`,
   `material`, `gender`, `wireless`, `anc`, `battery_life_hours`,
   `connectivity`) are typed columns or validated JSONB, decided in
   Milestone 2 by filtering needs.
 - Attributes that do not apply to a category stay null.
-- `storage_type` taxonomy is an open question: NVMe is an interface/protocol
-  and NVMe products are normally SSDs. Milestone 6 or 7 decides whether
-  `storage_type` is SSD/HDD with a separate interface field, or NVMe is an SSD
-  subtype. An explicit `ssd` query must not exclude NVMe SSDs
-  (`docs/spec.md` §14, item 9).
+- `storage_type` taxonomy (`docs/spec.md` §14, item 9): Milestone 2 stores the medium
+  (`storage_type` `SSD`/`HDD`) and the interface (`storage_interface` `NVME`/`SATA`) as separate
+  columns, Milestone 6 parses queries into the same split, and Milestone 7 defines matching:
+  `ssd` filters the medium only, so NVMe SSDs are not excluded, and `nvme` filters `SSD` +
+  `NVME`.
 - Provenance: `source_type`, plus the dataset reference and a synthetic flag
   (see `docs/data-quality.md`).
 
@@ -346,6 +389,8 @@ setting selects it.
   default 50, at most `SEARCH_LEXICAL_K + SEARCH_DENSE_K`) and `SEARCH_RRF_K` (default 100,
   provisional). Compose forwards both to the `api` service only. The hybrid source depths are
   `SEARCH_LEXICAL_K` and `SEARCH_DENSE_K`.
+- Milestone 7 adds no setting: `/search/filtered` uses the hybrid settings above, and the filter
+  policy version `fp-1` is a code constant.
 - Credentials only in environment variables. `.env` is git-ignored and only
   `.env.example` may be committed. Secrets are never logged.
 
@@ -364,6 +409,12 @@ setting selects it.
   the `fusion` block and the hit, overlap, fused and candidate counts.
 - Milestone 6 hybrid responses add `query_understanding_ms` (parse, provider call and result
   validation; always present on 200) and the informational `query_understanding` block.
+- Milestone 7 filtered responses report `lexical_ms`, `model_load_ms`, `query_embedding_ms`,
+  `vector_ms`, `rrf_ms` (null when the stage did not run), `query_understanding_ms`,
+  `filter_translation_ms` and `total_ms`, plus `filter_policy`, `applied_filters`,
+  `ignored_constraints` and the post-filter hit, overlap, fused and candidate counts. Filtering
+  runs inside the source SQL, so its cost is inside `lexical_ms` and `vector_ms`; no separate
+  `filtering_ms` is reported.
 - Provider telemetry: provider, pinned model version, latency, raw provider
   probabilities and gate-confidence values (separate fields), fallback reason
   and returned cost where available.
@@ -378,6 +429,7 @@ setting selects it.
 | `GET /search?q=...`, `POST /search` | 3 (V0 lexical implemented; later milestones add response fields as they become real) |
 | `GET /search/dense?q=...`, `POST /search/dense` | 4 (dense-only retrieval implemented; not a V-numbered version) |
 | `GET /search/hybrid?q=...`, `POST /search/hybrid` | 5 (V1 hybrid lexical + dense + RRF implemented; `rrf_k` provisional); 6 adds the informational `query_understanding` block |
+| `GET /search/filtered?q=...`, `POST /search/filtered` | 7 (V2 filtered hybrid implemented; filters from the M6 parse under `fp-1`) |
 | `POST /listings/analyze`, `POST /listings/normalize` | 13–14 (provisional) |
 | `GET /reviews/pending`, `POST /reviews/{review_id}/decision` | Listing milestones (provisional) |
 

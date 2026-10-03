@@ -39,8 +39,16 @@ available.
 Milestone 6 (deterministic query understanding): **implemented.** A pure, typed, local parser
 and the `DecisionProvider` interface with its deterministic provider (ADR-003). `/search/hybrid`
 reports the parse in an additive, **informational** `query_understanding` block; it does not
-change retrieval, ranking or filtering (`applied_filters` stays empty). See "Query understanding
-(Milestone 6)" below and `docs/query-understanding-m6.md`.
+change retrieval, ranking or filtering on `/search/hybrid` (`applied_filters` stays empty). See
+"Query understanding (Milestone 6)" below and `docs/query-understanding-m6.md`.
+
+Milestone 7 (structured filtering, **V2**): **implemented.** A new, additive
+`GET`/`POST /search/filtered` (`search_version = "v2_filtered"`) turns explicit, unambiguous,
+non-conflicting parsed constraints into hard SQL filters under the versioned filter policy
+`fp-1`, inside both the lexical and the dense source queries, and fuses the filtered lists with
+the unchanged V1 RRF. No schema, index, setting or dependency change. `/search` (V0),
+`/search/dense` and `/search/hybrid` (V1) are unchanged. See "Filtered search (Milestone 7)"
+below and `docs/search-filtered-m7.md`.
 
 ## Prerequisites
 
@@ -227,8 +235,8 @@ run `uv run alembic upgrade head`; nothing is written. The API itself returns th
   ordered by score then `product_id`. The score is query-relative and not a probability.
   Queries are not interpreted: `8gb`, `hp` and `40k` are plain words. Filler and Hinglish words
   (`ke liye`, `sasta`) are ordinary required terms, so they can empty the result (a V0
-  limitation; Milestone 6 query understanding is informational on `/search/hybrid` only and
-  does not change `/search`).
+  limitation; Milestone 6 query understanding and Milestone 7 filtering do not change
+  `/search`, and V2 still sends the unchanged text to the lexical side).
 
 ```bash
 curl "http://127.0.0.1:8000/search?q=hp+laptop&top_k=5"
@@ -306,7 +314,8 @@ curl -X POST http://127.0.0.1:8000/search/dense -H "Content-Type: application/js
   fixed 503 inside the container while lexical search and `/health` still work. The image is
   about 2 GB because of torch (CPU).
 * **Limitations.** 240 synthetic products; English-only model (Hinglish is not understood by
-  retrieval; Milestone 6 parses it for an informational report only); the first dense request
+  the embedding model; Milestone 6 parses it, and only `/search/filtered` (Milestone 7) turns
+  eligible parsed constraints into filters); the first dense request
   in a process pays the model load (several seconds). The exact-scan decision applies only at the current catalog size.
 
 **Warning: downgrading revision `0004` drops the derived embedding table** (regenerate it with
@@ -369,12 +378,51 @@ evidence are in [`docs/query-understanding-m6.md`](docs/query-understanding-m6.m
   (`usage: "informational"`, `provider`, `provider_version`, `understanding`) and
   `latency_ms.query_understanding_ms`. The parse never reaches retrieval: lexical and dense
   queries, RRF, ranks, scores and `rrf_k` are exactly as in Milestone 5, and `applied_filters`
-  stays `[]`. Whether parsed constraints become filters is decided in Milestone 7.
+  stays `[]`. Filtering from the parse exists only on `/search/filtered` (Milestone 7, below);
+  `/search/hybrid` itself is unchanged by Milestone 7.
 * **Failure.** If query understanding fails, `/search/hybrid` returns the fixed
   `503 {"detail": "search unavailable"}` before any model or database work and logs only
   `query_understanding_failed`; it never returns results without the block.
 * `/search` and `/search/dense` are unchanged. No relevance or extraction-accuracy claim is
   made: the rules are developer-authored and there is no Golden Dataset yet.
+
+## Filtered search (Milestone 7)
+
+V2 filtered hybrid retrieval (`search_version = "v2_filtered"`, filter policy `fp-1`). The
+deterministic Milestone 6 parse is the **only** filter source: there are no explicit filter
+parameters, and the query text sent to the lexical and dense sides is unchanged. **No relevance
+or quality claim is made**: the catalog is synthetic (240 products), the tests show filter
+correctness and contract conformance only, the Golden Dataset is Milestones 9 and 10, and no M7
+latency benchmark was run. Rules, API contract, evidence and limitations are in
+[`docs/search-filtered-m7.md`](docs/search-filtered-m7.md).
+
+Prerequisites: exactly those of `/search/hybrid` (revision `0004`, ingested catalog with current
+documents, the fetched MiniLM snapshot and current embeddings).
+
+```bash
+curl "http://127.0.0.1:8000/search/filtered?q=hp+laptop+8gb+ram&top_k=5"
+curl -X POST http://127.0.0.1:8000/search/filtered -H "Content-Type: application/json" -d '{"query": "laptop 8gb 256 ssd", "top_k": 5}'
+```
+
+* **Semantics.** Category, brand, RAM, storage capacity, storage type and storage interface are
+  exact equality; `min_price`/`max_price` are inclusive bounds. RAM and storage match a laptop or
+  phone spec row; storage type and interface exist only on laptops. `ssd` matches NVMe and SATA
+  SSDs; `nvme` means `SSD` + `NVME`. A missing spec row or NULL spec value never satisfies a spec
+  filter.
+* **What is not filtered.** Conflicting fields (`conflict`), numeric families blocked by an
+  ambiguity (`ambiguous_family`) and the semantic intent or `sasta` preference
+  (`informational_only`) are reported in `ignored_constraints`, never applied.
+* **No silent relaxation.** Filters run in SQL before each source's `LIMIT`; there is no
+  post-filtering, retry without filters or fallback to V1. When nothing satisfies the filters
+  the response is `200` with no results and `applied_filters` still reported.
+* **Response.** V1 fields plus `filter_policy` (`{"version": "fp-1"}`), `applied_filters`
+  (`field`, `operator` `eq`/`gte`/`lte`, canonical `value`), `ignored_constraints` (`field`,
+  `reason`), `query_understanding` with `usage: "filter_source"` and
+  `latency_ms.filter_translation_ms`. Failures use the same fixed
+  `503 {"detail": "search unavailable"}` as `/search/hybrid`.
+* **Limitations.** The lexical side is still strict AND over the full text, so words like
+  `under 40k` or `ke liye` often leave only dense candidates; missing or stale embeddings shorten
+  the dense list; `rrf_k = 100` remains provisional.
 
 ## `GET /health`
 

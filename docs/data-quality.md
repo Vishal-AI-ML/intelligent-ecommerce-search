@@ -97,7 +97,7 @@ evaluation. Each finding is reported with the product ID and the check name.
 | 3 | Prices and numeric attributes are plausible | Non-negative prices. Numeric attributes within ranges defined per category in Milestone 2 |
 | 4 | Category/attribute combinations are coherent | No attributes that do not belong to the category, such as `ram_gb` on shoes |
 | 5 | Titles do not obviously contradict structured attributes | For example a title saying "16GB" when `ram_gb=8` |
-| 6 | Units and storage types are recognized | Only known units and `storage_type` values. The value set depends on the storage taxonomy decision (NVMe is an interface, normally on SSDs. Milestone 6 or 7 decides how it is represented, see `docs/spec.md` §14, item 9) |
+| 6 | Units and storage types are recognized | Only known units and `storage_type` values. Storage taxonomy (`docs/spec.md` §14, item 9): Milestone 2 stores the representation (`storage_type` `SSD`/`HDD` and a separate `storage_interface` `NVME`/`SATA`, `NVME` only with `SSD`), Milestone 6 parses queries into the same representation, and Milestone 7 defines matching semantics (`ssd` matches NVMe and SATA SSDs; `nvme` means `SSD` + `NVME`) |
 | 7 | Brand/category combinations are plausible | Against the brand dictionary |
 | 8 | Duplicates do not dominate | Near-duplicate share reported. The acceptable level is set in Milestone 2 from the actual data |
 | 9 | Synthetic records are identified | Every record has a synthetic flag |

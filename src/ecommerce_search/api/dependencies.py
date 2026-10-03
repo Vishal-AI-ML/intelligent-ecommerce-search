@@ -26,5 +26,5 @@ def get_embedder(request: Request) -> Embedder | None:
 
 
 def get_decision_provider(request: Request) -> DecisionProvider:
-    """The application's single decision provider (Milestone 6; used only by /search/hybrid)."""
+    """The application's single decision provider (used by /search/hybrid and /search/filtered)."""
     return request.app.state.decision_provider

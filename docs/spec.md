@@ -131,6 +131,9 @@ measured against human-reviewed evaluation data.
   `LEXICON_VERSION = "1"`; `docs/query-understanding-m6.md`). The parse is informational: it is
   reported by `/search/hybrid` and never reaches retrieval, fusion or ranking, and no parsed value
   is a filter (`applied_filters` stays empty; filtering is FR-RET-4, Milestone 7).
+  **Milestone 7 note:** on `/search/hybrid` this is still true. The new `/search/filtered` (V2)
+  consumes the same unchanged `qu-1` parse as its only filter source (FR-RET-4 status); the
+  parser, lexicon and their versions did not change.
   - FR-QU-1: the frozen, `extra="forbid"` Pydantic `QueryUnderstanding` has every listed
     field, with `attributes` holding `storage_interface` (`NVME`) and `price_preference`
     (`low`), plus `parser_version`, `lexicon_version` and the evidence collections
@@ -183,6 +186,27 @@ measured against human-reviewed evaluation data.
   (`docs/search-hybrid-m5.md`). `/search` remains V0 and `/search/dense` remains available.
 - FR-RET-4 (V2): Safe structured filtering on category, brand, RAM, storage,
   storage type, minimum price and maximum price.
+- FR-RET-4 status (Milestone 7): **implemented** as V2 (`GET`/`POST /search/filtered`,
+  `search_version = "v2_filtered"`, filter policy `fp-1`; `docs/search-filtered-m7.md`).
+  - Filters come **only** from the deterministic `qu-1` parse (provider `deterministic`); there
+    are no explicit request filters and no model-derived filters (section 7, rule 2). A parsed
+    field is applied only with matching evidence and when no conflict or family-scoped ambiguity
+    blocks it; `semantic_intent` and `price_preference` are never filters. Skipped fields are
+    reported in `ignored_constraints` (`conflict`, `ambiguous_family`, `informational_only`).
+  - Matching: category and brand exact; `ram_gb` and `storage_gb` exact on a laptop or phone
+    spec row (no tolerance, RAM never matches storage); `storage_type` and `storage_interface`
+    exact on a laptop spec row; `min_price`/`max_price` inclusive (`>=`, `<=`). `ssd` filters the
+    medium only, so NVMe SSDs match (FR-QU-4); `nvme` filters `SSD` + `NVME`. A missing spec row
+    or NULL spec value never satisfies a spec filter.
+  - Filters run inside both the lexical and the dense SQL, before ranking and `LIMIT`, with one
+    shared fragment table, in one `REPEATABLE READ READ ONLY` snapshot; the query text is
+    unchanged and RRF (`rrf_k = 100`, provisional) is the V1 fusion.
+  - Zero matches is a `200` with no results and the applied filters reported. There is no
+    post-filtering, retry, relaxation or fallback to V1.
+  - No schema, index, setting or dependency change. `/search`, `/search/dense` and
+    `/search/hybrid` are unchanged. Tests and a scratch demo show filter correctness and
+    contract conformance only; no relevance, Constraint Satisfaction Rate or zero-result-rate
+    figure exists before Milestones 9 and 10.
 - FR-RET-5 (V3): Optional configurable cross-encoder reranking with on/off
   modes. Initial plan: 50 fused candidates, rerank 20, return 10. Benchmarks
   compare no reranker, rerank 10 and rerank 20.
@@ -224,6 +248,17 @@ measured against human-reviewed evaluation data.
   query-understanding failure returns the same fixed 503 before any model or database work.
   `/search` and `/search/dense` are unchanged. The reranker state is not reported yet (no
   reranker exists).
+- FR-API-2 status (Milestone 7): `GET`/`POST /search/filtered` responses carry the V1 fields
+  with `search_version` `v2_filtered` (hit counts are after filtering), plus `filter_policy`
+  (`version` `fp-1`), `applied_filters` (the safe filters actually applied: `field`, `operator`
+  `eq`/`gte`/`lte`, canonical string `value`, fixed field order), `ignored_constraints` (`field`,
+  `reason`), `query_understanding` (`usage` `filter_source`, `provider` `deterministic`,
+  `provider_version` `qu-1`, `understanding`) and `latency_ms` (`lexical_ms`, `model_load_ms`,
+  `query_embedding_ms`, `vector_ms`, `rrf_ms`, `query_understanding_ms`,
+  `filter_translation_ms`, `total_ms`). Invalid input is `422`; a query-understanding,
+  filter-policy, model or database failure is the fixed 503; any other unexpected error is the
+  framework's generic 500. `/search`, `/search/dense` and `/search/hybrid` responses are
+  unchanged. The reranker state is still not reported (no reranker exists).
 - FR-API-3: Listing endpoints (`POST /listings/analyze`,
   `POST /listings/normalize`, `GET /reviews/pending`,
   `POST /reviews/{review_id}/decision`) are deferred to their milestones.
@@ -328,6 +363,9 @@ Rules:
    detected and reported. They are never silently resolved by guessing.
 4. A zero-result outcome caused by filtering is measured and reported in
    evaluation (zero-result rate).
+   **Milestone 7:** the API returns such an outcome as a `200` with no results and the applied
+   filters reported, never relaxed. The zero-result rate is measured only on the Golden Dataset
+   (Milestones 9 and 10); M7 reports no rate.
 
 ### 7.1 Hinglish support
 
@@ -494,6 +532,9 @@ reporting. Split sizes and results are not decided in Milestone 0.
   `lexical_ms`, `model_load_ms`, `query_embedding_ms`, `vector_ms` and `total_ms`; a stage that
   did not run is `null`, and `model_load_ms` is `null` unless the request loaded the model.
   Per-run P50/P95/P99 are in `docs/search-hybrid-m5.md`.
+- Milestone 7 filtered responses add `filter_translation_ms` (the pure fp-1 translation) to the
+  M6 hybrid timings. Filtering runs inside the source SQL, so its cost is part of `lexical_ms`
+  and `vector_ms` and no separate `filtering_ms` is reported. No M7 latency benchmark was run.
 - Measured stages: `query_understanding_ms`, `jev_decision_ms`, `lexical_ms`,
   `vector_ms`, `filtering_ms`, `rrf_ms`, `reranking_ms`, `serialization_ms`,
   `total_ms`.
@@ -588,6 +629,9 @@ human review, and evaluation is human-reviewed.
    Milestone 6.
    **Milestone 6 (parsing):** inclusive. `under 50k` reports `max_price = 50000.00` meaning
    `<= 50000`, and lower bounds are inclusive too. How bounds filter is Milestone 7.
+   **Milestone 7 (filtering):** bounds filter inclusively, `price >= min_price` and
+   `price <= max_price`. `from 20k ke andar` parses to `min_price = max_price = 20000.00`, so
+   it matches only a price of exactly 20000.00 (none in the seed catalog: zero results).
 6. **Implicit storage units:** in `laptop 8gb 256 ssd`, a bare `256` next to a
    storage term is proposed to mean 256 GB. Confirm in Milestone 6.
    **Milestone 6 (parsing):** confirmed as a documented convention: a bare integer followed only
@@ -613,6 +657,9 @@ human review, and evaluation is human-reviewed.
    `storage_type = SSD`; `nvme` sets `attributes.storage_interface = NVME` and implies
    `storage_type = SSD`. An `ssd` parse therefore never carries an interface that could exclude
    NVMe SSDs. Matching products against parsed values remains Milestone 7.
+   **Milestone 7 (matching):** `ssd` filters `storage_type = SSD` only, so NVMe and SATA SSDs
+   both match; `nvme` filters `storage_type = SSD` and `storage_interface = NVME`; a NULL or
+   missing storage value never matches. Integration tests cover the `ssd` and `nvme` cases.
 10. **Borderline relevance mapping:** provisional and open until the
     annotation policy is approved (section 9.2).
 11. **Provisional, dataset-dependent values:** any numeric range, tolerance or

@@ -9,6 +9,12 @@
   developer-authored and checked by developer-written tests. There is no Golden Dataset and no
   human-labelled extraction set yet (Milestones 9 and 10). No benchmark or quality metric was
   run for this milestone.
+- Status note (Milestone 7, 2026-10-03): the new `/search/filtered` (V2) consumes eligible `qu-1`
+  fields as hard filters through filter policy `fp-1` (`docs/search-filtered-m7.md`). The
+  parser, lexicon, provider and their versions (`qu-1`, lexicon `1`) are unchanged, and
+  `/search/hybrid` still reports the parse for information only with `applied_filters = []`. The
+  M6 evidence in section 8 is historical and unchanged. Where this document defers filtering to
+  Milestone 7, the decision is in `docs/search-filtered-m7.md` §3.
 
 ## 1. Status and boundary
 
