@@ -36,6 +36,12 @@ schema change. `rrf_k = 100` is **provisional** (see "Hybrid search (Milestone 5
 `docs/search-hybrid-m5.md` and ADR-002). `/search` remains V0 and `/search/dense` remains
 available.
 
+Milestone 6 (deterministic query understanding): **implemented.** A pure, typed, local parser
+and the `DecisionProvider` interface with its deterministic provider (ADR-003). `/search/hybrid`
+reports the parse in an additive, **informational** `query_understanding` block; it does not
+change retrieval, ranking or filtering (`applied_filters` stays empty). See "Query understanding
+(Milestone 6)" below and `docs/query-understanding-m6.md`.
+
 ## Prerequisites
 
 - Python 3.12 (managed by `uv` via `.python-version`)
@@ -221,7 +227,8 @@ run `uv run alembic upgrade head`; nothing is written. The API itself returns th
   ordered by score then `product_id`. The score is query-relative and not a probability.
   Queries are not interpreted: `8gb`, `hp` and `40k` are plain words. Filler and Hinglish words
   (`ke liye`, `sasta`) are ordinary required terms, so they can empty the result (a V0
-  limitation for the query-understanding milestone).
+  limitation; Milestone 6 query understanding is informational on `/search/hybrid` only and
+  does not change `/search`).
 
 ```bash
 curl "http://127.0.0.1:8000/search?q=hp+laptop&top_k=5"
@@ -298,9 +305,9 @@ curl -X POST http://127.0.0.1:8000/search/dense -H "Content-Type: application/js
   neither the mount nor embedding settings. Without a fetched snapshot, dense search returns the
   fixed 503 inside the container while lexical search and `/health` still work. The image is
   about 2 GB because of torch (CPU).
-* **Limitations.** 240 synthetic products; English-only model (Hinglish is not understood until
-  query understanding in Milestone 6); the first dense request in a process pays the model load
-  (several seconds). The exact-scan decision applies only at the current catalog size.
+* **Limitations.** 240 synthetic products; English-only model (Hinglish is not understood by
+  retrieval; Milestone 6 parses it for an informational report only); the first dense request
+  in a process pays the model load (several seconds). The exact-scan decision applies only at the current catalog size.
 
 **Warning: downgrading revision `0004` drops the derived embedding table** (regenerate it with
 `embed`). `alembic downgrade base` still drops the pgvector extension and everything before it.
@@ -346,6 +353,28 @@ curl -X POST http://127.0.0.1:8000/search/hybrid -H "Content-Type: application/j
 * **Limitations.** The dense side has no similarity threshold, so hybrid search returns results
   even for nonsense queries; the model is English-only; scores are uncalibrated and not
   probabilities.
+
+## Query understanding (Milestone 6)
+
+A deterministic parser (`PARSER_VERSION = "qu-1"`, `LEXICON_VERSION = "1"`) reads the normalized
+query into a typed `QueryUnderstanding`: category, brand, RAM, storage capacity and type, NVMe
+interface, price bounds, `sasta` price preference and one semantic intent, each backed by
+matched terms with exact source spans, plus closed-reason ambiguities, conflicts and unresolved
+spans. It runs locally with no model, database, network or setting, through the
+`DecisionProvider` interface whose only implementation is the deterministic provider
+([ADR-003](docs/decisions/ADR-003-decision-provider.md)). Rules, examples, unsupported forms and
+evidence are in [`docs/query-understanding-m6.md`](docs/query-understanding-m6.md).
+
+* **Informational only.** `GET`/`POST /search/hybrid` add a `query_understanding` block
+  (`usage: "informational"`, `provider`, `provider_version`, `understanding`) and
+  `latency_ms.query_understanding_ms`. The parse never reaches retrieval: lexical and dense
+  queries, RRF, ranks, scores and `rrf_k` are exactly as in Milestone 5, and `applied_filters`
+  stays `[]`. Whether parsed constraints become filters is decided in Milestone 7.
+* **Failure.** If query understanding fails, `/search/hybrid` returns the fixed
+  `503 {"detail": "search unavailable"}` before any model or database work and logs only
+  `query_understanding_failed`; it never returns results without the block.
+* `/search` and `/search/dense` are unchanged. No relevance or extraction-accuracy claim is
+  made: the rules are developer-authored and there is no Golden Dataset yet.
 
 ## `GET /health`
 

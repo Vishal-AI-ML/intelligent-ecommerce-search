@@ -1,6 +1,6 @@
 # Architecture
 
-- Status: Milestone 0 design; implemented parts are marked per section (M1 foundation, M2 catalog, M3 lexical V0, M4 dense retrieval, M5 hybrid V1)
+- Status: Milestone 0 design; implemented parts are marked per section (M1 foundation, M2 catalog, M3 lexical V0, M4 dense retrieval, M5 hybrid V1, M6 informational query understanding)
 - Date: 2026-09-30
 - Related: `docs/spec.md`, `docs/data-quality.md`, `docs/decisions/`
 
@@ -125,6 +125,23 @@ the database is unavailable the endpoint fails closed with the fixed 503 instead
 lexical-only results. Missing or stale embeddings only shorten the dense list. No schema or
 index changed: V1 reads the M3 and M4 tables, and dense retrieval remains an exact scan.
 `/search` (V0) and `/search/dense` are unchanged.
+
+**Milestone 6 added informational query understanding** to `/search/hybrid` (still
+`search_version = "v1_hybrid"`; see `docs/query-understanding-m6.md`). It is not a V-numbered
+version: V2 filtering is Milestone 7. The implemented flow is:
+
+```text
+normalize the query once and validate top_k (422 unchanged)
+ -> deterministic parse + DecisionProvider + result validation (query_understanding_ms)
+    on any failure: fixed 503, no model, statement or connection checkout
+ -> no-searchable-text check (punctuation-only still gets the block, with no retrieval)
+ -> the unchanged M5 flow above, receiving only the normalized query string
+ -> response = M5 fields + additive query_understanding block (usage "informational")
+```
+
+The parse never reaches retrieval, fusion or ranking, and `applied_filters` stays empty. The
+Jev, confidence-gate, structured-filter and reranker stages of the section 3 pipeline are not
+implemented yet. Milestone 7 decides how parsed constraints become filters.
 
 Evaluation order: Milestones 3 to 8 use provisional, non-authoritative smoke
 queries. Human-reviewed labels arrive in Milestone 9, and Milestone 10 re-runs
@@ -262,6 +279,16 @@ implemented yet.
 `semantic_intent`, `retrieval_strategy`, `attributes`. Unset means unknown.
 Unknown is never turned into a guessed value.
 
+**Milestone 6 implementation** (`src/ecommerce_search/query_understanding/`): a pure layer with
+no I/O, logging, settings, clock, database, model or network. `tokenizer.py` is a hand-written
+linear scanner with 1:1 character folding and exact code-point offsets; `lexicon.py` is the
+closed, versioned v1 lexicon (`LEXICON_VERSION = "1"`) with exact allowed-gap sets;
+`parser.py` (`PARSER_VERSION = "qu-1"`) runs fixed single-pass stages and returns a frozen,
+`extra="forbid"` `QueryUnderstanding` with the fields above (`retrieval_strategy` always
+`null`), `attributes` (`storage_interface`, `price_preference`) and evidence: matched terms,
+closed-reason ambiguities, conflicts and unresolved spans. No table, migration, setting or
+dependency was added. Rules and examples: `docs/query-understanding-m6.md`.
+
 ### 5.5 Evaluation and experiment records
 
 Stored under `evals/` (created in a later milestone), separate from application
@@ -292,6 +319,16 @@ generated reports. The fields each experiment record carries are listed in
 - Failure handling: timeout, transport error, schema-invalid output,
   out-of-set label or disabled provider all lead to the deterministic result,
   and the fallback reason is recorded.
+
+**Milestone 6 implementation** (`src/ecommerce_search/decision/`): the `DecisionProvider`
+Protocol and `DeterministicDecisionProvider`, which returns the deterministic parse unchanged as
+a frozen `DecisionResult` (`provider`, `provider_version`, `understanding`). There is no raw
+probability, gate confidence, fallback reason or gate yet; they are added with the Milestone 11
+provider, not as placeholders. `understand_normalized_query` parses once, calls the provider
+once and validates the result. Because the deterministic provider is the only provider, a
+failure here has nothing to fall back to: `/search/hybrid` returns the fixed 503 and logs only
+`query_understanding_failed`. The app creates one provider (`app.state.decision_provider`); no
+setting selects it.
 
 ## 7. Configuration and secrets
 
@@ -325,6 +362,8 @@ generated reports. The fields each experiment record carries are listed in
 - Milestone 5 hybrid responses add `rrf_ms` to `lexical_ms`, `model_load_ms`,
   `query_embedding_ms`, `vector_ms` and `total_ms` (a stage that did not run is `null`), plus
   the `fusion` block and the hit, overlap, fused and candidate counts.
+- Milestone 6 hybrid responses add `query_understanding_ms` (parse, provider call and result
+  validation; always present on 200) and the informational `query_understanding` block.
 - Provider telemetry: provider, pinned model version, latency, raw provider
   probabilities and gate-confidence values (separate fields), fallback reason
   and returned cost where available.
@@ -338,7 +377,7 @@ generated reports. The fields each experiment record carries are listed in
 | `GET /health` | 1 |
 | `GET /search?q=...`, `POST /search` | 3 (V0 lexical implemented; later milestones add response fields as they become real) |
 | `GET /search/dense?q=...`, `POST /search/dense` | 4 (dense-only retrieval implemented; not a V-numbered version) |
-| `GET /search/hybrid?q=...`, `POST /search/hybrid` | 5 (V1 hybrid lexical + dense + RRF implemented; `rrf_k` provisional) |
+| `GET /search/hybrid?q=...`, `POST /search/hybrid` | 5 (V1 hybrid lexical + dense + RRF implemented; `rrf_k` provisional); 6 adds the informational `query_understanding` block |
 | `POST /listings/analyze`, `POST /listings/normalize` | 13–14 (provisional) |
 | `GET /reviews/pending`, `POST /reviews/{review_id}/decision` | Listing milestones (provisional) |
 

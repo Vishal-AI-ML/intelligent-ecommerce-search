@@ -9,6 +9,13 @@
   number below is a deterministic attribute-consistency proxy, an overlap or composition count,
   a determinism check or a latency measurement on a **synthetic, templated 240-product catalog**
   on one laptop. The proxy is not relevance, not quality ground truth and not a human label.
+- Status note (Milestone 6, 2026-10-03): the runs recorded here predate Milestone 6; their
+  queries, results and conclusions are unchanged. M6 added deterministic query understanding
+  that `/search/hybrid` reports for information only (`docs/query-understanding-m6.md`); it does
+  not change hybrid retrieval, RRF, `rrf_k`, ranks or scores. Retrieval still treats Hinglish
+  and filler words as plain query text, as before Milestone 6, until Milestone 7 or another
+  approved version changes it. Where this document says that Hinglish or query understanding is
+  Milestone 6, read it as parsing only.
 
 ## 1. Scope
 

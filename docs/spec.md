@@ -127,6 +127,31 @@ measured against human-reviewed evaluation data.
   stays `null`.
 - FR-QU-7: The parser stays small, typed and unit-tested. It must not grow
   into hundreds of fragile regular expressions.
+- FR-QU status (Milestone 6): **implemented for parsing only** (`PARSER_VERSION = "qu-1"`,
+  `LEXICON_VERSION = "1"`; `docs/query-understanding-m6.md`). The parse is informational: it is
+  reported by `/search/hybrid` and never reaches retrieval, fusion or ranking, and no parsed value
+  is a filter (`applied_filters` stays empty; filtering is FR-RET-4, Milestone 7).
+  - FR-QU-1: the frozen, `extra="forbid"` Pydantic `QueryUnderstanding` has every listed
+    field, with `attributes` holding `storage_interface` (`NVME`) and `price_preference`
+    (`low`), plus `parser_version`, `lexicon_version` and the evidence collections
+    (`matched_terms`, `ambiguities`, `conflicts`, `unresolved`) with code-point source spans.
+    `retrieval_strategy` is always `null` in M6.
+  - FR-QU-2: the deterministic parser runs on every `/search/hybrid` request before any model or
+    database work, locally and with no network.
+  - FR-QU-3: the listed forms are recognized and normalized (`40k` → `40000.00`, `1tb` → `1024`
+    GB, `₹40000` and `rs 40000` → `40000.00`). A capacity sets `ram_gb` or `storage_gb` only with
+    a role keyword or the documented pairing convention, and a price sets `min_price` or
+    `max_price` only next to a bound marker; otherwise the value is reported as an ambiguity
+    (`bare_capacity`, `price_without_bound`).
+  - FR-QU-4: `ram`, `storage`, `ssd`, `hdd` and `nvme` are supported; `memory` alone is reported
+    as `ambiguous_memory_capacity`. `nvme` sets the interface and implies `storage_type = SSD`;
+    `ssd` never sets an interface (section 14, item 9).
+  - FR-QU-5: the section 7.1 phrase set is implemented (section 7.1 status note).
+  - FR-QU-6: absent values stay `null`; ambiguous, conflicting or unsupported input sets no
+    field. Two documented conventions bind values without an explicit role word: implicit GB
+    (`256 ssd`) and the R6 RAM pairing (`8gb 256gb ssd`).
+  - FR-QU-7: a hand-written linear tokenizer and a closed, versioned lexicon; no regular
+    expressions. No extraction-accuracy figure exists before the Golden Dataset (Milestone 9).
 
 ### 6.3 Retrieval and ranking
 
@@ -192,6 +217,13 @@ measured against human-reviewed evaluation data.
   `query_embedding_ms`, `vector_ms`, `rrf_ms`, `total_ms`). `top_k` is 1..`candidate_k`. If the
   dense capability or the database is unavailable the endpoint fails closed with the same fixed
   503; it never degrades silently to lexical-only results.
+- FR-API-2 status (Milestone 6): `/search/hybrid` responses additively carry
+  `query_understanding` (`usage` `informational`, `provider` `deterministic`, `provider_version`
+  `qu-1`, `understanding`) and `latency_ms.query_understanding_ms` (always present on 200). Every
+  M5 field, result, rank and score is unchanged and `applied_filters` stays empty. A
+  query-understanding failure returns the same fixed 503 before any model or database work.
+  `/search` and `/search/dense` are unchanged. The reranker state is not reported yet (no
+  reranker exists).
 - FR-API-3: Listing endpoints (`POST /listings/analyze`,
   `POST /listings/normalize`, `GET /reviews/pending`,
   `POST /reviews/{review_id}/decision`) are deferred to their milestones.
@@ -216,6 +248,14 @@ measured against human-reviewed evaluation data.
   value consumed by the confidence policy. A provider's raw probability must
   not become gate confidence until its meaning and calibration are verified
   (for Jev, in Milestone 12). Both are logged, as separate fields.
+- FR-DEC status (Milestone 6): FR-DEC-1 and FR-DEC-2 are **implemented**: a `DecisionProvider`
+  Protocol with `understand(query, deterministic_result) -> DecisionResult` and the local
+  `DeterministicDecisionProvider`, which returns the deterministic parse unchanged. The
+  `DecisionResult` is a frozen Pydantic model and its type and `raw_query` are validated
+  (FR-DEC-3, validation part). Fallback is not applicable yet: the deterministic provider is the
+  only provider, so an invalid or failed result returns the fixed 503 instead of results without
+  a parse. FR-DEC-3 fallback semantics, FR-DEC-4 and FR-DEC-5 (probability and gate-confidence
+  fields) remain for Milestones 11 and 12; M6 adds no placeholder for them.
 
 ### 6.6 Listing intelligence (Level 2)
 
@@ -310,6 +350,14 @@ Milestone 6 and corrected there if the tests show otherwise.
 
 Extending the dictionary means adding entries with tests. Milestone 0 does not
 add a large phrase list, and it does not implement the dictionary.
+
+**Milestone 6 status:** the dictionary is implemented as the closed, versioned lexicon
+(`LEXICON_VERSION = "1"`) and the roles above are confirmed by tests as proposed. `ke andar` and
+`ke under` set `max_price` only after an explicit price (`50k ke andar`); `wala` and `ka` only
+extend the evidence span of the construction right before them; `sasta` sets
+`attributes.price_preference = "low"` and never a price; `X ke liye` and `for X` set
+`semantic_intent` for each of the eight intents. Retrieval is unchanged: Hinglish words are still
+plain query text for lexical and dense search, as in Milestone 5.
 
 ## 8. Confidence gating and human review
 
@@ -538,8 +586,13 @@ human review, and evaluation is human-reviewed.
 5. **Price-bound inclusivity:** whether `under 50k` means `<= 50000` or
    `< 50000`. The proposed default is inclusive (`<=`). Confirm in
    Milestone 6.
+   **Milestone 6 (parsing):** inclusive. `under 50k` reports `max_price = 50000.00` meaning
+   `<= 50000`, and lower bounds are inclusive too. How bounds filter is Milestone 7.
 6. **Implicit storage units:** in `laptop 8gb 256 ssd`, a bare `256` next to a
    storage term is proposed to mean 256 GB. Confirm in Milestone 6.
+   **Milestone 6 (parsing):** confirmed as a documented convention: a bare integer followed only
+   by storage keywords (`256 ssd`) is `storage_capacity_implicit_gb`. In `laptop 8gb 256 ssd` the
+   leftover `8gb` is paired as RAM by the R6 convention.
 7. **Currency:** examples imply INR (`₹`, `rs`, `k`). Queries are assumed to be
    in the catalog currency. Multi-currency support is out of scope.
 8. **Jev API behavior, model versions and output semantics:** unverified.
@@ -556,6 +609,10 @@ human review, and evaluation is human-reviewed.
    `storage_type = SSD` (a database CHECK). This settles the stored representation only. The
    query-matching semantics (for example that an `ssd` query must include NVMe SSDs) remain
    deferred to Milestone 6/7.
+   **Milestone 6 (parsing):** the query parse uses the same split: `ssd` sets only
+   `storage_type = SSD`; `nvme` sets `attributes.storage_interface = NVME` and implies
+   `storage_type = SSD`. An `ssd` parse therefore never carries an interface that could exclude
+   NVMe SSDs. Matching products against parsed values remains Milestone 7.
 10. **Borderline relevance mapping:** provisional and open until the
     annotation policy is approved (section 9.2).
 11. **Provisional, dataset-dependent values:** any numeric range, tolerance or

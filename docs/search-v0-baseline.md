@@ -5,6 +5,12 @@
 - **No relevance or quality claim is made.** There is no Golden Dataset yet (Milestone 9). The
   checks below are consistency checks and latency measurements on a **synthetic, templated
   240-product catalog**, which is easier than real listings.
+- Status note (Milestone 6, 2026-10-03): the runs recorded here predate Milestone 6; their
+  queries, results and conclusions are unchanged. M6 added deterministic query understanding
+  that `/search/hybrid` reports for information only (`docs/query-understanding-m6.md`); it does
+  not change V0 `/search`. Retrieval still treats Hinglish and filler words as plain query text,
+  as before Milestone 6, until Milestone 7 or another approved version changes it. Where this
+  document says that Hinglish or query understanding is Milestone 6, read it as parsing only.
 
 ## 1. Design
 

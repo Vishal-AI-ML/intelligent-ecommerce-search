@@ -65,6 +65,31 @@ understand(query, deterministic_result) -> DecisionResult
 The interface is created in Milestone 6 with only the deterministic provider.
 It is kept minimal and not extended ahead of need.
 
+### Implementation status (Milestone 6)
+
+Implemented in `src/ecommerce_search/decision/provider.py`:
+
+- `DecisionProvider` is a typed Protocol:
+  `understand(query: str, deterministic_result: QueryUnderstanding) -> DecisionResult`.
+- `DeterministicDecisionProvider` is the only implementation. It is local, needs no network,
+  credentials, model or setting, and returns the deterministic parse unchanged.
+- `DecisionResult` is a frozen Pydantic model that forbids extra fields and carries only
+  `provider` (`deterministic`), `provider_version` (`qu-1`) and `understanding`. No raw
+  probability, gate confidence, latency, fallback-reason or decision-type fields exist yet; they
+  are added with the first provider that produces them (Milestone 11), not as placeholders.
+- `understand_normalized_query` parses once, calls the provider once and checks that the result
+  is a `DecisionResult` for the same normalized query; otherwise it raises
+  `QueryUnderstandingFailed` (fixed message, no query text).
+- Failure boundary: the deterministic provider is itself the fallback this ADR describes, so in
+  M6 there is nothing further to fall back to. `/search/hybrid` turns any failure into the fixed
+  `503 {"detail": "search unavailable"}`, logs only `query_understanding_failed` and runs no
+  model or database work; it never returns results without the parse.
+- The decision is informational only (`docs/query-understanding-m6.md`): it does not change
+  retrieval, ranking or filtering.
+
+The Jev provider (Milestone 11, ADR-005), its fallback semantics and the confidence gate remain
+deferred.
+
 ## Alternatives considered
 
 - **Calling a model directly inside the parser or search code:** couples core

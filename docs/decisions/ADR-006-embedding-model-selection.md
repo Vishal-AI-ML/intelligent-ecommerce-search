@@ -182,6 +182,10 @@ labels.
   products, for every model.
 - **English only.** The models are English; Hinglish (`coding ke liye laptop`) is not supported
   by design. Query understanding is Milestone 6.
+  *Status note (Milestone 6, 2026-10-03):* the measurements in this ADR predate Milestone 6 and
+  are unchanged. M6 query understanding is informational only (`docs/query-understanding-m6.md`):
+  it does not change the embedding model, the query text it encodes or retrieval, so Hinglish
+  retrieval remains the Milestone 5 behaviour until Milestone 7 or another approved version.
 
 ## User sign-off (2026-10-01, recorded from the user's approval message)
 
