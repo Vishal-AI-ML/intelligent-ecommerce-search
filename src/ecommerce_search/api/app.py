@@ -6,6 +6,7 @@ from fastapi import FastAPI
 
 from ecommerce_search import __version__
 from ecommerce_search.api.dense import router as dense_router
+from ecommerce_search.api.filtered import router as filtered_router
 from ecommerce_search.api.health import router as health_router
 from ecommerce_search.api.hybrid import router as hybrid_router
 from ecommerce_search.api.search import router as search_router
@@ -62,4 +63,5 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(search_router)
     app.include_router(dense_router)
     app.include_router(hybrid_router)
+    app.include_router(filtered_router)
     return app

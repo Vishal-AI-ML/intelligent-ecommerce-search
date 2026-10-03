@@ -3,6 +3,7 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from ecommerce_search.filtering import AppliedFilter, IgnoredConstraint
 from ecommerce_search.query_understanding.models import QueryUnderstanding
 
 
@@ -293,3 +294,120 @@ class HybridSearchResponse(BaseModel):
     applied_filters: list[str] = Field(description="Always empty: no filters exist yet.")
     query_understanding: QueryUnderstandingBlock
     latency_ms: HybridSearchLatency
+
+
+# ---- filtered search (Milestone 7, V2) ---------------------------------------------------------
+
+
+class FilteredSearchRequest(BaseModel):
+    """Body of `POST /search/filtered`. Same validation as `GET /search/filtered`."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    query: str = Field(description="Search text. Whitespace is collapsed; see /docs for limits.")
+    top_k: int | None = Field(
+        default=None,
+        ge=1,
+        description="Maximum results to return. Default and upper bound come from settings.",
+    )
+
+
+class FilterPolicy(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    version: Literal["fp-1"] = Field(
+        description="The versioned policy that decided which parsed constraints became filters."
+    )
+
+
+class FilteredQueryUnderstandingBlock(BaseModel):
+    """Deterministic query understanding (Milestone 6) used as the only source of the fp-1
+    filters. The query text itself is never rewritten: retrieval sees the normalized query."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    usage: Literal["filter_source"] = Field(
+        description="Always `filter_source`: the parse is translated into filters by the policy."
+    )
+    provider: Literal["deterministic"] = Field(description="The decision provider used.")
+    provider_version: Literal["qu-1"] = Field(description="Version of the decision provider.")
+    understanding: QueryUnderstanding
+
+
+class FilteredSearchLatency(BaseModel):
+    lexical_ms: float | None = Field(
+        description="Time in the filtered lexical SQL queries and row fetch; null when they did "
+        "not run."
+    )
+    model_load_ms: float | None = Field(
+        description="Time to load the embedding model during this request; null when it was "
+        "already loaded or not needed."
+    )
+    query_embedding_ms: float | None = Field(
+        description="Time to check the query's token length and encode it; null when no "
+        "encoding ran."
+    )
+    vector_ms: float | None = Field(
+        description="Time in the filtered vector SQL query and row fetch; null when it did not run."
+    )
+    rrf_ms: float | None = Field(
+        description="Time to fuse the candidate lists; null when fusion did not run."
+    )
+    query_understanding_ms: float = Field(
+        description="Time to parse the query, call the decision provider and validate its "
+        "result. Always present on a 200 response."
+    )
+    filter_translation_ms: float = Field(
+        description="Time to translate the decision into filters with the filter policy. Always "
+        "present on a 200 response. Filtering itself runs inside the source SQL and is part of "
+        "`lexical_ms` and `vector_ms`."
+    )
+    total_ms: float = Field(
+        description="Application processing from handler entry through construction of the "
+        "result models. Excludes request validation and framework response serialization."
+    )
+
+
+class FilteredSearchResponse(BaseModel):
+    query: str = Field(
+        description="The query after whitespace normalization. Sent unchanged to both sources."
+    )
+    search_version: Literal["v2_filtered"]
+    document_version: str
+    tsquery: str | None = Field(
+        description="PostgreSQL tsquery text generated from the query; null when no SQL ran "
+        "(the query has no letter or digit)."
+    )
+    embedding_model_id: str
+    embedding_model_revision: str = Field(description="Immutable model commit hash.")
+    embedding_dimension: int
+    embedding_text_version: str
+    distance_metric: Literal["cosine"]
+    fusion: HybridFusion
+    dense_status: Literal["used", "skipped_no_searchable_text"]
+    lexical_hit_count: int = Field(
+        description="Lexical candidates retrieved after filtering (at most lexical_k)."
+    )
+    dense_hit_count: int = Field(
+        description="Dense candidates retrieved after filtering (at most dense_k). Only "
+        "embeddings current for the active model and the product's current content take part, "
+        "so this can be lower while embeddings are missing or stale."
+    )
+    overlap_count: int = Field(description="Products present in both candidate lists.")
+    fused_count: int = Field(description="Unique products in the union of both lists.")
+    candidate_count: int = Field(description="Fused candidates kept (at most candidate_k).")
+    top_k: int = Field(description="The requested (or default) maximum number of results.")
+    result_count: int = Field(description="Number of results returned in this response.")
+    results: list[HybridSearchResult]
+    filter_policy: FilterPolicy
+    applied_filters: list[AppliedFilter] = Field(
+        description="Hard filters applied inside both source queries, in fixed field order. "
+        "Values are canonical strings (prices with two decimals). Never relaxed: when no "
+        "product satisfies them the result list is empty."
+    )
+    ignored_constraints: list[IgnoredConstraint] = Field(
+        description="Parsed constraints the filter policy deliberately did not apply, with the "
+        "reason, in fixed field order."
+    )
+    query_understanding: FilteredQueryUnderstandingBlock
+    latency_ms: FilteredSearchLatency
