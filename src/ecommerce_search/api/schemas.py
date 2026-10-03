@@ -3,6 +3,8 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from ecommerce_search.query_understanding.models import QueryUnderstanding
+
 
 class ComponentCheck(BaseModel):
     status: Literal["ok", "error"]
@@ -237,10 +239,28 @@ class HybridSearchLatency(BaseModel):
     rrf_ms: float | None = Field(
         description="Time to fuse the candidate lists; null when fusion did not run."
     )
+    query_understanding_ms: float = Field(
+        description="Time to parse the query, call the decision provider and validate its "
+        "result (Milestone 6). Always present on a 200 response."
+    )
     total_ms: float = Field(
         description="Application processing from handler entry through construction of the "
         "result models. Excludes request validation and framework response serialization."
     )
+
+
+class QueryUnderstandingBlock(BaseModel):
+    """Deterministic query understanding (Milestone 6). Informational only: nothing in it
+    filters, boosts or otherwise changes retrieval, fusion or ranking."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    usage: Literal["informational"] = Field(
+        description="Always `informational`: the parse is reported, never applied to results."
+    )
+    provider: Literal["deterministic"] = Field(description="The decision provider used.")
+    provider_version: Literal["qu-1"] = Field(description="Version of the decision provider.")
+    understanding: QueryUnderstanding
 
 
 class HybridSearchResponse(BaseModel):
@@ -271,4 +291,5 @@ class HybridSearchResponse(BaseModel):
     result_count: int = Field(description="Number of results returned in this response.")
     results: list[HybridSearchResult]
     applied_filters: list[str] = Field(description="Always empty: no filters exist yet.")
+    query_understanding: QueryUnderstandingBlock
     latency_ms: HybridSearchLatency

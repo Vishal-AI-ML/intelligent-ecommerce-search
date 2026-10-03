@@ -9,7 +9,11 @@ from sqlalchemy.exc import OperationalError, ProgrammingError
 
 from ecommerce_search.api import dense as dense_module
 from ecommerce_search.api.app import create_app
-from ecommerce_search.api.dependencies import get_db_session, get_embedder
+from ecommerce_search.api.dependencies import (
+    get_db_session,
+    get_decision_provider,
+    get_embedder,
+)
 from ecommerce_search.api.schemas import DenseSearchResponse
 from ecommerce_search.embeddings.provider import EmbedderUnavailable
 from ecommerce_search.embeddings.spec import ALL_MINILM_L6_V2
@@ -298,3 +302,69 @@ def test_lexical_search_never_touches_the_embedder(client_for, monkeypatch):
     with client_for() as client:
         assert client.get("/search", params={"q": "x"}).status_code == 200
     assert client.fake.load_calls == 0
+
+
+class RaisingProvider:
+    """Installed to prove `/search/dense` never invokes the Milestone 6 decision provider."""
+
+    def __init__(self) -> None:
+        self.calls = 0
+
+    def understand(self, query, deterministic_result):
+        self.calls += 1
+        raise RuntimeError("the dense endpoint must not call the decision provider")
+
+
+def test_dense_search_never_invokes_the_decision_provider(client_for, calls):
+    provider = RaisingProvider()
+    with client_for() as client:
+        client.app.state.decision_provider = provider
+        client.app.dependency_overrides[get_decision_provider] = lambda: provider
+        got = client.get("/search/dense", params={"q": "hp laptop 8gb"})
+        posted = client.post("/search/dense", json={"query": "hp laptop 8gb"})
+        punctuation = client.get("/search/dense", params={"q": "!!!"})
+    assert got.status_code == posted.status_code == punctuation.status_code == 200
+    assert provider.calls == 0
+    assert len(calls) == 2  # the punctuation-only query skips retrieval, as in M4
+    assert "query_understanding" not in got.text and "query_understanding" not in posted.text
+
+
+def test_openapi_dense_components_keep_their_m4_fields(client_for):
+    with client_for() as client:
+        schemas = client.get("/openapi.json").json()["components"]["schemas"]
+    assert set(schemas["DenseSearchResponse"]["properties"]) == {
+        "query",
+        "search_version",
+        "embedding_model_id",
+        "embedding_model_revision",
+        "embedding_dimension",
+        "embedding_text_version",
+        "distance_metric",
+        "top_k",
+        "result_count",
+        "results",
+        "applied_filters",
+        "latency_ms",
+    }
+    assert set(schemas["DenseSearchLatency"]["properties"]) == {
+        "model_load_ms",
+        "query_embedding_ms",
+        "vector_ms",
+        "total_ms",
+    }
+    assert set(schemas["DenseSearchResult"]["properties"]) == {
+        "rank",
+        "dense_score",
+        "product_id",
+        "title",
+        "brand",
+        "category",
+        "subcategory",
+        "description",
+        "price",
+        "currency",
+        "rating",
+        "review_count",
+        "availability",
+    }
+    assert set(schemas["DenseSearchRequest"]["properties"]) == {"query", "top_k"}

@@ -1,10 +1,11 @@
 """`GET /search/hybrid` and `POST /search/hybrid` (Milestone 5, V1). One shared validation path.
 
-Order of work: validate, then load the model and encode the query (no database connection is
-used), then read both sources in one REPEATABLE READ READ ONLY transaction, which ends before
-fusion and response construction. Failures map to the same fixed generic 503 body as
-`/search/dense`; the server log records only a fixed reason code and an operator hint. `/search`,
-`/search/dense` and `/health` are untouched by this module.
+Order of work: validate, then run deterministic query understanding (Milestone 6; informational
+only, its output never reaches retrieval or fusion), then load the model and encode the query (no
+database connection is used), then read both sources in one REPEATABLE READ READ ONLY
+transaction, which ends before fusion and response construction. Failures map to the same fixed
+generic 503 body as `/search/dense`; the server log records only a fixed reason code and an
+operator hint. `/search`, `/search/dense` and `/health` are untouched by this module.
 """
 
 import logging
@@ -17,16 +18,23 @@ from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
 from ecommerce_search.api.dense import HINTS, encode_query, has_searchable_text
-from ecommerce_search.api.dependencies import get_db_session, get_embedder, get_settings_dep
+from ecommerce_search.api.dependencies import (
+    get_db_session,
+    get_decision_provider,
+    get_embedder,
+    get_settings_dep,
+)
 from ecommerce_search.api.schemas import (
     HybridFusion,
     HybridSearchLatency,
     HybridSearchRequest,
     HybridSearchResponse,
     HybridSearchResult,
+    QueryUnderstandingBlock,
     SearchUnavailable,
 )
 from ecommerce_search.config import Settings
+from ecommerce_search.decision import DecisionProvider, understand_normalized_query
 from ecommerce_search.embeddings.provider import Embedder, EmbedderUnavailable
 from ecommerce_search.embeddings.text import EMBEDDING_TEXT_VERSION
 from ecommerce_search.search.dense import DISTANCE_METRIC
@@ -49,8 +57,9 @@ RESPONSES = {
     422: {"description": "Invalid query text or top_k (standard validation error body)."},
     503: {
         "model": SearchUnavailable,
-        "description": "The embedding model, the search index or the search database is "
-        "unavailable. The body is fixed and carries no internal details.",
+        "description": "Query understanding failed, or the embedding model, the search index "
+        "or the search database is unavailable. The body is fixed and carries no internal "
+        "details.",
     },
 }
 DESCRIPTION = (
@@ -63,7 +72,10 @@ DESCRIPTION = (
     "retrieval has no similarity threshold, so even a nonsense query can return results. Only "
     "embeddings current for the active model and product content are used, so dense candidates "
     "may be fewer while embeddings are missing or stale (`dense_hit_count`). Queries without any "
-    "letter or digit return no results without running the model or the database."
+    "letter or digit return no results without running the model or the database. "
+    "`query_understanding` reports a deterministic parse of the query (Milestone 6). It is "
+    "informational only: it applies no filter and does not change retrieval, fusion or ranking "
+    "(`applied_filters` stays empty)."
 )
 
 
@@ -84,6 +96,7 @@ def _hybrid_search(
     session: Session,
     settings: Settings,
     embedder: Embedder | None,
+    provider: DecisionProvider,
     raw_query: str,
     top_k: int | None,
     query_location: tuple[str, str],
@@ -97,6 +110,13 @@ def _hybrid_search(
     limit = settings.search_default_top_k if top_k is None else top_k
     if not 1 <= limit <= settings.search_candidate_k:
         raise _invalid(top_k_location, f"top_k must be between 1 and {settings.search_candidate_k}")
+    # Informational only: `decision` is used solely to build the response block below.
+    understanding_started = time.perf_counter()
+    try:
+        decision = understand_normalized_query(query, provider)
+    except Exception:
+        raise _unavailable("query_understanding_failed") from None
+    understanding_ms = round((time.perf_counter() - understanding_started) * 1000, 3)
     spec = settings.embedding_spec()
     searchable = has_searchable_text(query)
     tsquery = lexical_ms = load_ms = embed_ms = vector_ms = rrf_ms = None
@@ -183,12 +203,19 @@ def _hybrid_search(
         result_count=len(results),
         results=results,
         applied_filters=[],
+        query_understanding=QueryUnderstandingBlock(
+            usage="informational",
+            provider=decision.provider,
+            provider_version=decision.provider_version,
+            understanding=decision.understanding,
+        ),
         latency_ms=HybridSearchLatency(
             lexical_ms=lexical_ms,
             model_load_ms=load_ms,
             query_embedding_ms=embed_ms,
             vector_ms=vector_ms,
             rrf_ms=rrf_ms,
+            query_understanding_ms=understanding_ms,
             total_ms=total_ms,
         ),
     )
@@ -205,13 +232,16 @@ def hybrid_search_get(
     session: Annotated[Session, Depends(get_db_session)],
     settings: Annotated[Settings, Depends(get_settings_dep)],
     embedder: Annotated[Embedder | None, Depends(get_embedder)],
+    provider: Annotated[DecisionProvider, Depends(get_decision_provider)],
     q: Annotated[str, Query(description="Search text.")],
     top_k: Annotated[
         int | None,
         Query(ge=1, description="Maximum results. Default and upper bound come from settings."),
     ] = None,
 ) -> HybridSearchResponse:
-    return _hybrid_search(session, settings, embedder, q, top_k, ("query", "q"), ("query", "top_k"))
+    return _hybrid_search(
+        session, settings, embedder, provider, q, top_k, ("query", "q"), ("query", "top_k")
+    )
 
 
 @router.post(
@@ -226,7 +256,15 @@ def hybrid_search_post(
     session: Annotated[Session, Depends(get_db_session)],
     settings: Annotated[Settings, Depends(get_settings_dep)],
     embedder: Annotated[Embedder | None, Depends(get_embedder)],
+    provider: Annotated[DecisionProvider, Depends(get_decision_provider)],
 ) -> HybridSearchResponse:
     return _hybrid_search(
-        session, settings, embedder, body.query, body.top_k, ("body", "query"), ("body", "top_k")
+        session,
+        settings,
+        embedder,
+        provider,
+        body.query,
+        body.top_k,
+        ("body", "query"),
+        ("body", "top_k"),
     )

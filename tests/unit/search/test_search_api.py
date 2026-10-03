@@ -6,7 +6,7 @@ from sqlalchemy.exc import OperationalError
 
 from ecommerce_search.api import search as search_module
 from ecommerce_search.api.app import create_app
-from ecommerce_search.api.dependencies import get_db_session
+from ecommerce_search.api.dependencies import get_db_session, get_decision_provider
 from ecommerce_search.api.schemas import SearchResponse
 from ecommerce_search.search.lexical import LexicalHit, LexicalResult
 
@@ -262,3 +262,61 @@ def test_unsafe_text_is_never_logged_or_echoed(client_for, caplog):
         )
     assert response.status_code == 422
     assert "ud800" not in response.text and "ud800" not in caplog.text
+
+
+class RaisingProvider:
+    """Installed to prove `/search` never invokes the Milestone 6 decision provider."""
+
+    def __init__(self) -> None:
+        self.calls = 0
+
+    def understand(self, query, deterministic_result):
+        self.calls += 1
+        raise RuntimeError("the lexical endpoint must not call the decision provider")
+
+
+def test_lexical_search_never_invokes_the_decision_provider(client_for, calls):
+    provider = RaisingProvider()
+    with client_for() as client:
+        client.app.state.decision_provider = provider
+        client.app.dependency_overrides[get_decision_provider] = lambda: provider
+        got = client.get("/search", params={"q": "hp laptop 8gb"})
+        posted = client.post("/search", json={"query": "hp laptop 8gb"})
+        punctuation = client.get("/search", params={"q": "!!!"})
+    assert got.status_code == posted.status_code == punctuation.status_code == 200
+    assert provider.calls == 0
+    assert calls == [("hp laptop 8gb", 10), ("hp laptop 8gb", 10), ("!!!", 10)]
+    assert "query_understanding" not in got.text and "query_understanding" not in posted.text
+
+
+def test_openapi_lexical_components_keep_their_m5_fields(client_for):
+    with client_for() as client:
+        schemas = client.get("/openapi.json").json()["components"]["schemas"]
+    assert set(schemas["SearchResponse"]["properties"]) == {
+        "query",
+        "search_version",
+        "document_version",
+        "top_k",
+        "result_count",
+        "results",
+        "tsquery",
+        "applied_filters",
+        "latency_ms",
+    }
+    assert set(schemas["SearchLatency"]["properties"]) == {"lexical_ms", "total_ms"}
+    assert set(schemas["SearchResult"]["properties"]) == {
+        "rank",
+        "lexical_score",
+        "product_id",
+        "title",
+        "brand",
+        "category",
+        "subcategory",
+        "description",
+        "price",
+        "currency",
+        "rating",
+        "review_count",
+        "availability",
+    }
+    assert set(schemas["SearchRequest"]["properties"]) == {"query", "top_k"}

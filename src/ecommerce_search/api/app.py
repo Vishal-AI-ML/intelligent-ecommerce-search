@@ -11,6 +11,7 @@ from ecommerce_search.api.hybrid import router as hybrid_router
 from ecommerce_search.api.search import router as search_router
 from ecommerce_search.config import Settings, get_settings
 from ecommerce_search.db.engine import create_db_engine, create_session_factory
+from ecommerce_search.decision import DeterministicDecisionProvider
 from ecommerce_search.embeddings.sentence_transformers_provider import (
     SentenceTransformerEmbedder,
 )
@@ -55,6 +56,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             logger.info("engine disposed")
 
     app = FastAPI(title="Intelligent E-commerce Search", version=__version__, lifespan=lifespan)
+    # One stateless, local provider per app: constructing it performs no I/O.
+    app.state.decision_provider = DeterministicDecisionProvider()
     app.include_router(health_router)
     app.include_router(search_router)
     app.include_router(dense_router)
